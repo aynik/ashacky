@@ -1,0 +1,9 @@
+[Unit]
+Description=Ashacky hardware video decoder socket
+[Socket]
+ListenStream=%t/linuxhost-video/decoder-direct.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,460 @@
+{
+  "note": "Historical inputs to the initial source consolidation, before cleanup and parameterization. Paths describe that import, not the current checkout; upstream copies were later replaced by submodules and patches. Hashes identify reference-source inputs, not current build outputs. No private installation configuration was imported.",
+  "files": [
+    {
+      "path": "host/frontend/main.m",
+      "source_sha256": "f77d80c65b3c1973f33408222d3c7e793f092e5cbccfe50046eab8817df4b385",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/frontend/Pasteboard.h",
+      "source_sha256": "2a9c9ed7bf798b10db47efd9053f90f6202d813dc292b2453d1da1ff295ce80c",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/control/Control.swift",
+      "source_sha256": "7e480ce515088cf9059c602711d212675da801e8a09043ab2e621422dbe91a1b",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/common/IPC.swift",
+      "source_sha256": "a920f7e1dbb6cd48e1c12eed3a2eb05b1ee45234f2c7e469fb4eed6fa578c994",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "helpers/power/PowerHelper.swift",
+      "source_sha256": "f34dcdf3ed767fedb0f82513064510b31b693c6aa8b5d9a69023426a1b3b5a02",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/session/session.py",
+      "source_sha256": "406eb1d7620efdc72cbcd877c3bb4f54386627374c25623151b7ea69c3294c90",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/session/control-forward.py",
+      "source_sha256": "02116d7965a1b047919b60a0c201b390a387562b5c27d8c6a028e5117b38f559",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "guest/auth/pam_linuxhost.c",
+      "source_sha256": "ab4fcf462393f1e7141dbb6a836566ba474b6fa7db28980bcbc050299ff38b13",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/AudioBackend.swift",
+      "source_sha256": "bb17f09d22534280b6d6f47b593bc74e76bac6c07826073862e060f600837c7d",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/BluetoothWorkbench.swift",
+      "source_sha256": "7cd31903c3922676eddcd5c6eddd54413f313c310196f25416fcfbafc5427fc3",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/CameraWorkbench.swift",
+      "source_sha256": "f4a4ab5afcc7039e78b0bf47461f4d86f2c69a3f36768dfcb2a618d8cfdb8e76",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/WPA2Key.swift",
+      "source_sha256": "4ca34416556afae091280dfc456daad72fa6b2b92b4244f317a7c370b7b049d9",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/WiFiBackend.swift",
+      "source_sha256": "6a593d7cc69fed4b1b837a6beec13a6a06e9ae14145ae85fac5ed182a1797a2b",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/WiFiWorkbench.swift",
+      "source_sha256": "90a6c546a3c3b3f189aa5612e4008e59f779f75a558ed80a11473a9af176f260",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/build-wifi-workbench.sh",
+      "source_sha256": "81702b0f027821df8a543c714cc244cfa1cde605dbfc0f666f8e36f90fc79810",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/build-bluetooth-workbench.sh",
+      "source_sha256": "a173e82a05c840077bde5366289d8b44e709acd92eabf3c5204414a8dabcd2f9",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/devices/build-camera-workbench.sh",
+      "source_sha256": "e55661eb00e29501d8911cc6d769bf1f171793abbf53e9e26dd965c9f7e5e7b1",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/transport/vm_session.py",
+      "source_sha256": "6973a7b756ff703be3f6e01709912226d18551a86897f1d1b47f56ac516bc23a",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/transport/probe-ssh",
+      "source_sha256": "ad836e37fe9ece079dfa0940db732f1abbfc6d40532da716dba43b69dd6e4529",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/transport/probe-address.py",
+      "source_sha256": "8c640e7a00482ceb909c5e3e251cb0ba5c86672efb0937887113d25d51c20c97",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/transport/probe-device-service.py",
+      "source_sha256": "bde69fbbfff34e5ba773c5b1f09f965fd1221ae0bb85a61e9e8b344878412b4d",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/transport/vm-ssh.py",
+      "source_sha256": "7741d14e41879330839e92322e37c9ca0096d5d3c923ede74316ea5796baa8fc",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/session/SessionSync.swift",
+      "source_sha256": "9769744439659062a5699aa74920a0e9615c362752226621e03319bea7b54d56",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/libexec/linuxhost-agent",
+      "source_sha256": "525c4eaf59dcfc21dddf2b7c31b73e1cb124ab4d775f584c6326d7e998149d84",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/libexec/linuxhost-session-sync",
+      "source_sha256": "8aa30fe94f6d639b57211505506d6a661e6a6f848e1adb3e865c4c606756e0dc",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/libexec/linuxhost-video-memory",
+      "source_sha256": "46230db38145a9f76a9f678af3e17a7e91741b506130f028f6f4f212363b6d9f",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/audio_management.py",
+      "source_sha256": "cfa3baf45297690bfa344a37fde4fb4972d27567cadff3d78d337e023b10bc81",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/audio_pipewire.py",
+      "source_sha256": "41d70def10843ef4229071325a9843f6a702887384eb25c282518b4a25e8f44c",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/bluetooth_management.py",
+      "source_sha256": "12d398e38f6d2932f72eab39f8bd619a8c6cf81b0e6dbc1c2720a6c217fb5f0d",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/bluetooth_bluez.py",
+      "source_sha256": "e7748c346ccb13d821112f6f44168acd25164a136059c77248fa8402bf57a646",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/camera_bridge.py",
+      "source_sha256": "22c74526d9e13efa0aad9aec2b9f9fb84bab4a745d0ddb6ed74aebdb0bb577c0",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/camera_demand.py",
+      "source_sha256": "98465ca08652fc4c16426ef410c37117d7ec615dec078714e91a9a09935ae577",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/camera_readers.c",
+      "source_sha256": "b07bf5e65c199cc14f1d5c79891f1ca490e0cab1c843f84b2babe7bdf02cfd27",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/device_service.py",
+      "source_sha256": "97672d0737a8d480c5a968fbd7ed035cd01e1434f88a79172c67db6bb99da14a",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/wifi_bridge.py",
+      "source_sha256": "3bbbcf0115824d7a0afff273a387080e2e4afe98ddc4d3f1ce92e54a58481125",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/wifi_power.py",
+      "source_sha256": "27d641eb8bef7ef4d12c31215c1703d2867104b69b01b95a280c080161b5649a",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/devices/wifi_scan.py",
+      "source_sha256": "5e9aead1683017ca2bfb0693eaf9703b5071217e55ef729eae56170d63c67721",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/input/trackpad.py",
+      "source_sha256": "03a161e10e7d90fa13dd3563eedfd4f152bdd2869046708ce3a16e0b9be8d915",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "tests/test_trackpad.py",
+      "source_sha256": "668f72c79526a981cd9078365e48272eb5d5e04819f7842c429c323b57cadc62",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "helpers/usb/usb-host.c",
+      "source_sha256": "8c99c23530c6070fb7061bd413ae366b8fbc918df04d5ce55d4c597061a89230",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/battery/linuxhost_battery.c",
+      "source_sha256": "3388168c58c785b9a4cbfb4b9d9a13b70f915b354d2a1318ba5db57906dcfae5",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/battery/dkms.conf",
+      "source_sha256": "5f3f9a5a03bca89302e5bfec099f21b625125cb2afe52c364fa7960cb38bbab4",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/battery/Makefile",
+      "source_sha256": "6776cad8090530e92232531f22b2331cd0bd669993a79fedbdf8abda6d433576",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/battery/feed.py",
+      "source_sha256": "b54a3363cfbe9370ee102f7f54a08e7b67018184211f66eff595f17ea3eaca79",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/bluetooth/linuxhost_bt_rfkill.c",
+      "source_sha256": "9c562e803d7b81019f0e4607a139feeb5be81165d889a4742b8bb46f8ac52ac4",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/bluetooth/dkms.conf",
+      "source_sha256": "5916b8a7e2299c97d743c9439c1e1845a961eaf312d4e75d3e11adb238e6aeea",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/bluetooth/Makefile",
+      "source_sha256": "e368a6c040a56b86d5c56f145d1bbac04bdd69625eec14a71d7a1c3a3d5969b5",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/wifi/linuxhost_wifi.c",
+      "source_sha256": "75aa3a2362b8e7a2a20d967ca297e79fdf1ff2eeb90db3b770c45a536ca46fdb",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/wifi/dkms.conf",
+      "source_sha256": "ad0ce278ce9f0eeb6922816e36554d2cb5aa3c8458563f4c8dca49962541d7b3",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/drivers/wifi/Makefile",
+      "source_sha256": "cbf36a0d82e486ca6d9cadc1046475bb3d0a20bb1e18b11b7d3997a260382716",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-battery.service",
+      "source_sha256": "775bd1eeb3b8d06d9ccf1415c1eb1e63ff3e54337e2319c6bda4cb3616c740b3",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-probe-bluetooth.service",
+      "source_sha256": "0e291a77417aa459ba2650aa06a52a51f12e9268b65d25356da0c7cecb5ac1c7",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-probe-camera.service",
+      "source_sha256": "105c7b7ffcca12ad506a52f1ad81edd965e6afb4f150b9f77e64566d7c86171e",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-probe-wifi.service",
+      "source_sha256": "b4299208a872aa0f69d7ff0d26f2e7698141329962fb4c9d2e0b380e7cf424cd",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-probe-wifi-power.service",
+      "source_sha256": "87fca0fdfed1272440cc81d974307006645fbdcec056799eb008df44d637572e",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-agent.service",
+      "source_sha256": "c572b0fe2e96cba0fb9fb117e10d112e5919872c35776f51902a0e26489c240c",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-probe-management.service",
+      "source_sha256": "e4b9c0ba56c8e34c1e8d85949c2d49e1796d7426a84e78afc6069781bfb59886",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-video-memory.service",
+      "source_sha256": "3974ab6312fba0a9183f9ca94626620c695a5272a3f5c4a00b22ff36a9277707",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-trackpad.service",
+      "source_sha256": "0f7e01f5b3227be1041d18230dd02ffa0dbeda4017c344a0ee1f65058257b428",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/system/linuxhost-probe-devices.service",
+      "source_sha256": "bfa772098e62a33dbd52cec2cbc3e23423dd7386ff135d6a13b2d9316d28eb26",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/user/linuxhost-audio-pipewire.service",
+      "source_sha256": "2af40a172516255f9b373b1f62e9e1723d7d8846ed4a69b2c6b7a66022eaf903",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/user/linuxhost-video-direct.service",
+      "source_sha256": "f5cc468ada3e4f8cb46c695b2d3c1370bb012bf1849d3b56dc2f1842fddc81d4",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/systemd/user/linuxhost-video-direct.socket",
+      "source_sha256": "8ff2378d31b793034dc13d6a386f2946591017bf3f9a395addb61db54b29a2bd",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/gnome/linuxhost@local/extension.js",
+      "source_sha256": "87615bbdb515da862ade5398032bb7bcdd325ba97d36caeb0d7da76aca7c1bee",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/gnome/linuxhost@local/metadata.json",
+      "source_sha256": "56240ba8155d94ee94897d20e9434d2c3fd20d99afce1f0a6e67e388ee2c4436",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/h264.c",
+      "source_sha256": "ec5d9ab27edede3c5a75e6e476165e218dacf5d7be4ec3a7cdb6f5a351d80be3",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/graphics.c",
+      "source_sha256": "64803a7e25adf5f1bc04249070d59cac0780118e8c0f18aff0b708a53935f848",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/h264.h",
+      "source_sha256": "1ae47ea147e15250c8c175a5f8a1b2e26bde92ab64286c9551e0ad391b65e7a3",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/graphics.h",
+      "source_sha256": "56b4ff4b8127d0fb9aa56f27170de9297926a310baf0e84fd365eb5e3f22d2be",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/linuxhost_drv_video.c",
+      "source_sha256": "2670d7b72d9b9baa2cd6d9f38bb7390ef5afa1abefa3db45b6d0b93a27e406e6",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/preconnect.c",
+      "source_sha256": "894190240ee79b9f543345367379cfaaaed620177feb3cc499c5fbc91ffd3303",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/bs.h",
+      "source_sha256": "ed1e91b5d70c058b91b4f67fcda41e3db0d2c8931a9bfbf683efe2ee5e213528",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/decoder-worker.c",
+      "source_sha256": "65df5f3e4a0dcc5c35af058665a3565f2629436727d7af76b6ec14d49087d427",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "host/video/CodecShared.swift",
+      "source_sha256": "fcc3a5e89c25ee617eb112d9161960960d2e1b33e6b31f1bcb0423bfb5ec1310",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "host/video/fence.c",
+      "source_sha256": "136231d202118c8102a5d1d0d116e6a751cf1cb87425ce8a935ff56e7b7f7415",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "upstream/qemu/linuxhost-shmem.c",
+      "source_sha256": "9f950633f13afb2f3ec8e55a356f3d4483b1dd118b4443d261c3a9ba25c2f951",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "upstream/video-revisions.json",
+      "source_sha256": "3484254d1b06fafffc2616b53e9f7c1c338a77617690fc6a0a4ceeda32e8b6e8",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "upstream/patches/videotoolbox-remote.patch",
+      "source_sha256": "f8a42eac9311546f2f495c9d94564c2b37a80abe0914718f3bb895e3b59a0f4f",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "LICENSES/COPYING.LGPLv2.1",
+      "source_sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "LICENSES/COPYING.LGPLv3",
+      "source_sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "LICENSES/COPYING.GPLv2",
+      "source_sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "LICENSES/COPYING.GPLv3",
+      "source_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/firefox",
+      "source_sha256": "dd4ff3ca280761ab301cad4eb4242e3a38c9b4ab245d2dfecbe4688cc9c0f5d2",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/ashacky-video.js",
+      "source_sha256": "fd53f2a1d690a5a8868c4d8dbfe4bf4010b8d82e7458a831dae29d75a2879074",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "guest/video/mpv.conf",
+      "source_sha256": "1ad366c23fbc73741e884cb5985b9ea0d0f6654f9488c819f1b1cb82247acec2",
+      "origin": "working Linux source"
+    },
+    {
+      "path": "upstream/patches/qemu-utm.patch",
+      "source_sha256": "eb3838cbd2e6d44db03dc2f550d0e2bf58f13791fe34614587ab73bd673c00c7",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "upstream/patches/spice-server-utm.patch",
+      "source_sha256": "f4ab372d6bfcfcf80e46944bb9371bfd2b064d319f02272523743a14f81136d0",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "upstream/patches/spice-gtk-utm.patch",
+      "source_sha256": "077de87abc796acd32a821ab86ef4748d63d7462d4ebb580fa0cd9312ff2e093",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "upstream/patches/gst-plugins-base-utm.patch",
+      "source_sha256": "b96e7af09ede00dbfab37ac4dfa53442f931c6a19697ae8899b66f3990ec6286",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "upstream/patches/gst-plugins-good-utm.patch",
+      "source_sha256": "72aa80881fe146fb2f131e0b055a5b194132f959d96e34a85d49c154ea608bb0",
+      "origin": "working macOS source"
+    },
+    {
+      "path": "host/frontend/hypervisor-entitlements.plist",
+      "source_sha256": "c439c3ffbe9d1b486321de3360bd9f1368024751553ae131aa0490e4e49841dd",
+      "origin": "working macOS source"
+    }
+  ]
+}

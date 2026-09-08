@@ -1,0 +1,115 @@
+diff --git a/Sources/CocoaSpice/CSDisplay+Renderer.m b/Sources/CocoaSpice/CSDisplay+Renderer.m
+index 95ccdb5..e9d8f72 100644
+--- a/Sources/CocoaSpice/CSDisplay+Renderer.m
++++ b/Sources/CocoaSpice/CSDisplay+Renderer.m
+@@ -29,6 +29,7 @@ @interface CSDisplay ()
+ @implementation CSDisplay (Renderer)
+ 
+ - (void)addRenderer:(id<CSRenderer>)renderer {
++    NSLog(@"Attach renderer=%@ device=%@",renderer,renderer.device);
+     NSArray<id<CSRenderer>> *renderers = self.renderers;
+     if (![renderers containsObject:renderer]) {
+         self.renderers = [renderers arrayByAddingObject:renderer];
+diff --git a/Sources/CocoaSpice/CSDisplay.m b/Sources/CocoaSpice/CSDisplay.m
+index 95fca04..0fcfa01 100644
+--- a/Sources/CocoaSpice/CSDisplay.m
++++ b/Sources/CocoaSpice/CSDisplay.m
+@@ -154,6 +154,7 @@ static void cs_update_monitor_area(SpiceChannel *channel, GParamSpec *pspec, gpo
+         goto whole;
+     
+     g_object_get(self.channel, "monitors", &monitors, NULL);
++    NSLog(@"Monitor state id=%ld count=%u canvas=%@ GL=%d device=%@", (long)self.monitorID, monitors->len, NSStringFromRect(self.canvasArea), self.isGLEnabled, self.device);
+     //for (i = 0; monitors != NULL && i < monitors->len; i++) {
+     //    cfg = &g_array_index(monitors, SpiceDisplayMonitorConfig, i);
+     //    if (cfg->id == self.monitorID) {
+@@ -241,11 +242,13 @@ static void cs_gl_draw(SpiceDisplayChannel *channel,
+ #pragma mark - Properties
+ 
+ - (void)setDevice:(id<MTLDevice>)device {
++    NSLog(@"Set device requested %@ current %@",device,_device);
+     if (_device == device) {
+         return;
+     }
+     [CSMain.sharedInstance asyncWith:^{
+         _device = device;
++        NSLog(@"Device attached display=%p gl=%d delayed=%p texture=%@",self,self.isGLEnabled,self.delayedScanoutSurface,self.glTexture);
+         // the shadow buffer belongs to the old device
+         self.shadowTexture = nil;
+         self.presentTexture = nil;
+@@ -513,6 +516,9 @@ - (void)rebuildScanoutTextureWithSurface:(IOSurfaceRef)surface width:(NSUInteger
+     // the damage rects that follow describe changes against the previous
+     // scanout, so the first copy out of a new one has to be whole
+     self.shadowNeedsFullCopy = YES;
++    // Attaching a renderer asynchronously can deliver monitor configuration
++    // before this surface exists. Recompute the visible area now that it does.
++    cs_update_monitor_area(SPICE_CHANNEL(self.channel), NULL, (__bridge void *)self);
+ }
+ 
+ /// Allocate the private texture the scanout is copied into. See
+@@ -775,7 +781,7 @@ - (void)requestResolution:(CGRect)bounds {
+ }
+ 
+ - (void)setIsEnabled:(BOOL)isEnabled {
+-    if (_isEnabled != isEnabled) {
++    { // Always synchronize: requestResolution also changes the SPICE enabled state.
+         if (!self.spiceMain) {
+             SPICE_DEBUG("[CocoaSpice] ignoring display enable change because main channel not found");
+             return;
+diff --git a/Sources/CocoaSpice/CSPort.m b/Sources/CocoaSpice/CSPort.m
+index 2cf253d..ec7a095 100644
+--- a/Sources/CocoaSpice/CSPort.m
++++ b/Sources/CocoaSpice/CSPort.m
+@@ -74,7 +74,8 @@ static void cs_port_write_cb(GObject *source_object,
+                              GAsyncResult *res,
+                              gpointer user_data)
+ {
+-    CSPort *self = (__bridge_transfer CSPort *)user_data;
++    NSArray *context = (__bridge_transfer NSArray *)user_data;
++    CSPort *self = context[0];
+     SpicePortChannel *port = SPICE_PORT_CHANNEL(source_object);
+     GError *error = NULL;
+ 
+@@ -158,7 +159,7 @@ - (void)setDelegate:(id<CSPortDelegate>)delegate {
+ 
+ - (void)writeData:(NSData *)data {
+     [CSMain.sharedInstance asyncWith:^{
+-        spice_port_channel_write_async(self.channel, data.bytes, data.length, NULL, cs_port_write_cb, (__bridge_retained void *)self);
++        spice_port_channel_write_async(self.channel, data.bytes, data.length, NULL, cs_port_write_cb, (__bridge_retained void *)@[self, data]);
+     }];
+ }
+ 
+diff --git a/Sources/CocoaSpice/CSUSBManager.m b/Sources/CocoaSpice/CSUSBManager.m
+index 3614831..7da3788 100644
+--- a/Sources/CocoaSpice/CSUSBManager.m
++++ b/Sources/CocoaSpice/CSUSBManager.m
+@@ -40,6 +40,10 @@ @interface CSUSBManager ()
+ @end
+ 
+ @implementation CSUSBManager
++- (void)setRedirectOnConnectFilter:(NSString *)filter {
++    g_object_set(self.usbDeviceManager, "redirect-on-connect", filter.UTF8String, NULL);
++}
++
+ 
+ #pragma mark - Signal callbacks
+ 
+diff --git a/Sources/CocoaSpiceRenderer/CSMetalRenderer.m b/Sources/CocoaSpiceRenderer/CSMetalRenderer.m
+index 9c7bad9..2e070cc 100644
+--- a/Sources/CocoaSpiceRenderer/CSMetalRenderer.m
++++ b/Sources/CocoaSpiceRenderer/CSMetalRenderer.m
+@@ -306,6 +306,15 @@ - (void)drawInMTKView:(nonnull MTKView *)view
+                  sampler:self.renderSampler
+     renderPassDescriptor:renderPassDescriptor];
+ 
++    static NSUInteger lastLoggedWidth=0, lastLoggedHeight=0;
++    NSUInteger width=sourceData.texture.width, height=sourceData.texture.height;
++    if (width != lastLoggedWidth || height != lastLoggedHeight) {
++        lastLoggedWidth=width; lastLoggedHeight=height;
++        NSLog(@"Frame submitted to Metal: %lux%lu",(unsigned long)width,(unsigned long)height);
++        [currentDrawable addPresentedHandler:^(id<MTLDrawable> drawable) {
++            NSLog(@"Frame presented on screen: %lux%lu time=%.3f",(unsigned long)width,(unsigned long)height,drawable.presentedTime);
++        }];
++    }
+     [commandBuffer presentDrawable:currentDrawable];
+ 
+     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> commandBuffer) {

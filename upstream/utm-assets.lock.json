@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "release": "https://github.com/utmapp/UTM/releases/tag/v5.0.5",
+  "archive": {
+    "url": "https://github.com/utmapp/UTM/releases/download/v5.0.5/UTM.dmg",
+    "sha256": "713afe73c711f01344b8766654be531cd391ed2e30931206f43b5159f143764f",
+    "size": 302621893
+  },
+  "components": [
+    {
+      "path": "Frameworks/EGL.framework",
+      "treeSHA256": "fcf7cab2ba10c9192e6eafe8062893573afb4650b3d0a6622e7e0fa7fe024a47"
+    },
+    {
+      "path": "Frameworks/GLESv2.framework",
+      "treeSHA256": "82690b12950e2ae489b57a31e664b9dbb9dcf3c124d7be1b9e5a7cbe2d1e2553"
+    },
+    {
+      "path": "Frameworks/MoltenVK.framework",
+      "treeSHA256": "89f2aabef01df134379abb775071c1ae78dc6c76824c3d163e03a6751b13a139"
+    },
+    {
+      "path": "Frameworks/epoxy.0.framework",
+      "treeSHA256": "42d9d86abf84a8b48f64303b5a11657d16072798e054c30831f0f7454a4564de"
+    },
+    {
+      "path": "Frameworks/virglrenderer.1.framework",
+      "treeSHA256": "18fc9c4489f11a3c6faef018b59fa65581e8df86d64962c45a28145864d38ab9"
+    },
+    {
+      "path": "Frameworks/vulkan.1.framework",
+      "treeSHA256": "566f1a2e3a51a77d8f2e81f7c6a7c9ce614e40f4d2f7fe0e33d0fc73bee7428e"
+    },
+    {
+      "path": "Resources/CocoaSpice_CocoaSpiceRenderer.bundle",
+      "treeSHA256": "a177c05e55610bf60b893037b69c07137e471d7737125470bc27c9c4bf6dfa01"
+    }
+  ],
+  "shaderBundle": "Resources/CocoaSpice_CocoaSpiceRenderer.bundle",
+  "shaderSources": {
+    "CocoaSpiceRenderer/CSShaders.metal": "d5e8e37b868d796c800ae7bb979122335bd4fe45666307778ebda694289a90ba",
+    "CocoaSpiceRenderer/include/CSShaderTypes.h": "0353990d08b38bc1e85eb1749f96474417d2a87f13d398e76aeaa27374d3efbe"
+  }
+}

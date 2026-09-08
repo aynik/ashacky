@@ -1,0 +1,11 @@
+[Unit]
+Description=Ashacky VideoToolbox decoding broker
+Requires=linuxhost-video-direct.socket
+After=linuxhost-video-direct.socket
+[Service]
+EnvironmentFile=/etc/ashacky/video.env
+ExecStart=/opt/linuxhost-video/bin/decoder-worker-direct-va --systemd
+NoNewPrivileges=yes
+UMask=0077
+Restart=on-failure
+RestartSec=2

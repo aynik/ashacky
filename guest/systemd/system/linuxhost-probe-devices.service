@@ -1,0 +1,14 @@
+[Unit]
+Description=LinuxHost probe virtual devices
+Wants=NetworkManager.service
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/linuxhost-probe/probe-devices.py
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

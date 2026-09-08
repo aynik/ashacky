@@ -1,0 +1,121 @@
+#!/usr/bin/python3
+"""Root-owned, bounded RPC bridge. Never accepts shell commands."""
+import json
+import hmac
+import os
+import pathlib
+import socket
+import struct
+import subprocess
+import threading
+import time
+
+CONFIG = pathlib.Path('/etc/linuxhost.json')
+RUNTIME = pathlib.Path('/run/linuxhost')
+ALLOWED = {'status', 'powercheck', 'sleep', 'poweroff', 'restart', 'logout', 'authenticate'}
+
+def host_request(request):
+    config = json.loads(CONFIG.read_text())
+    request = dict(request, token=config['token'])
+    endpoint = config.get('hostSocket')
+    with socket.socket(socket.AF_UNIX if endpoint else socket.AF_VSOCK, socket.SOCK_STREAM) as client:
+        client.settimeout(80)
+        client.connect(endpoint if endpoint else (2, 4050))
+        client.sendall(json.dumps(request).encode() + b'\n')
+        result = client.makefile('rb').readline(16384)
+        return json.loads(result)
+
+def refresh_status():
+    generation = None
+    while True:
+        try:
+            status = host_request({'action': 'status'})
+            new_generation = status.get('wakeGeneration')
+            if generation is not None and new_generation != generation:
+                # Host sleep suspends execution; refresh guest time and network after wake.
+                subprocess.run(['systemctl', 'try-restart', 'systemd-timesyncd.service'], timeout=10, check=False)
+            generation = new_generation
+            temporary = RUNTIME / 'status.tmp'
+            temporary.write_text(json.dumps(status))
+            temporary.chmod(0o644)
+            temporary.replace(RUNTIME / 'status.json')
+        except Exception as error:
+            print('Status refresh:', error, flush=True)
+        time.sleep(5)
+
+def serve_host_commands():
+    with socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM) as server:
+        server.bind((socket.VMADDR_CID_ANY, 4051))
+        server.listen(4)
+        while True:
+            client, address = server.accept()
+            with client:
+                client.settimeout(5)
+                try:
+                    request = json.loads(client.makefile('rb').readline(4096))
+                    expected = json.loads(CONFIG.read_text())['token']
+                    if address[0] != 2 or not hmac.compare_digest(str(request.get('token', '')), expected):
+                        raise PermissionError('Unauthenticated host')
+                    action = request.get('action')
+                    if action not in ('shutdown', 'lock'):
+                        raise ValueError('Unsupported host action')
+                    client.sendall(b'{"ok":true}\n')
+                    if action == 'shutdown':
+                        subprocess.run(['systemctl', 'poweroff', '--no-block'], timeout=10, check=True)
+                    else:
+                        subprocess.run(['loginctl', 'lock-sessions'], timeout=10, check=True)
+                except Exception as error:
+                    try:
+                        client.sendall(json.dumps({'ok': False, 'error': str(error)}).encode() + b'\n')
+                    except OSError:
+                        pass
+
+def serve():
+    RUNTIME.mkdir(mode=0o755, exist_ok=True)
+    endpoint = RUNTIME / 'agent.sock'
+    endpoint.unlink(missing_ok=True)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(endpoint))
+        endpoint.chmod(0o666)  # Peer UID is checked below, including for read operations.
+        server.listen(8)
+        threading.Thread(target=refresh_status, daemon=True).start()
+        if not json.loads(CONFIG.read_text()).get('hostSocket'):
+            threading.Thread(target=serve_host_commands, daemon=True).start()
+        while True:
+            client, _ = server.accept()
+            with client:
+                client.settimeout(5)
+                try:
+                    _, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    if uid not in (0, json.loads(CONFIG.read_text())['userID']):
+                        raise PermissionError('Only the Linux desktop user may use this service')
+                    payload = client.makefile('rb').readline(4096)
+                    if not payload.endswith(b'\n'):
+                        raise ValueError('Invalid request')
+                    request = json.loads(payload)
+                    action = request.get('action')
+                    if action not in ALLOWED:
+                        raise ValueError('Unsupported action')
+                    if action == 'authenticate':
+                        if request.get('purpose') not in ('test', 'sudo', 'unlock'):
+                            raise ValueError('Unsupported authentication purpose')
+                        if request['purpose'] in ('sudo', 'unlock') and uid != 0:
+                            raise PermissionError('Authentication integration requires PAM/root')
+                    # Drop all unknown fields, especially caller-supplied tokens.
+                    outgoing = {'action': action}
+                    if action == 'authenticate':
+                        outgoing['purpose'] = request['purpose']
+                    if action == 'sleep':
+                        subprocess.run(['loginctl', 'lock-sessions'], timeout=10, check=False)
+                    result = host_request(outgoing)
+                    client.sendall(json.dumps(result).encode() + b'\n')
+                    if result.get('ok') and result.get('shutdownGuest'):
+                        subprocess.run(['systemctl', 'poweroff', '--no-block'], timeout=10, check=True)
+                except Exception as error:
+                    try:
+                        client.sendall(json.dumps({'ok': False, 'error': str(error)}).encode() + b'\n')
+                    except OSError:
+                        pass
+
+if __name__ == '__main__':
+    serve()

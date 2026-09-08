@@ -1,0 +1,21 @@
+[Unit]
+Description=LinuxHost macOS integration
+After=local-fs.target systemd-user-sessions.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/linuxhost-agent
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=linuxhost
+RuntimeDirectoryMode=0755
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/run/linuxhost
+RestrictAddressFamilies=AF_UNIX AF_VSOCK AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

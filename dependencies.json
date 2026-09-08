@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "sources": {
+    "qemu": {
+      "archive": "qemu",
+      "patches": [
+        "third_party/utm/patches/qemu-10.0.12-utm.patch",
+        "patches/qemu-local.patch"
+      ],
+      "copies": {
+        "host/qemu/linuxhost-shmem.c": "hw/misc/linuxhost-shmem.c"
+      }
+    },
+    "spice-protocol": {
+      "submodule": "third_party/spice-protocol"
+    },
+    "spice-server": {
+      "submodule": "third_party/spice-server",
+      "patches": [
+        "third_party/utm/patches/spice-0.14.3.patch",
+        "patches/spice-server-release-version.patch"
+      ]
+    },
+    "gstreamer": {
+      "submodule": "third_party/gstreamer"
+    },
+    "gst-plugins-base": {
+      "submodule": "third_party/gst-plugins-base",
+      "patches": [
+        "third_party/utm/patches/gst-plugins-base-1.19.1.patch"
+      ]
+    },
+    "gst-plugins-good": {
+      "submodule": "third_party/gst-plugins-good",
+      "patches": [
+        "third_party/utm/patches/gst-plugins-good-1.19.1.patch"
+      ]
+    },
+    "spice-gtk": {
+      "submodule": "third_party/spice-gtk",
+      "patches": [
+        "third_party/utm/patches/spice-gtk-0.42.patch",
+        "patches/spice-gtk-release-version.patch"
+      ]
+    },
+    "cocoaspice": {
+      "submodule": "third_party/cocoaspice",
+      "patches": [
+        "patches/cocoaspice.patch"
+      ]
+    },
+    "videotoolbox-remote": {
+      "submodule": "third_party/videotoolbox-remote",
+      "patches": [
+        "patches/videotoolbox-remote.patch",
+        "patches/vtremoted-bundle-libraries.patch"
+      ]
+    },
+    "rockchip-vaapi": {
+      "submodule": "third_party/rockchip-vaapi",
+      "patches": [
+        "patches/rockchip-vaapi.patch"
+      ]
+    },
+    "angle-webkit": {
+      "submodule": "third_party/angle-webkit"
+    },
+    "libepoxy": {
+      "submodule": "third_party/libepoxy"
+    },
+    "vulkan-loader": {
+      "submodule": "third_party/vulkan-loader"
+    },
+    "virglrenderer": {
+      "submodule": "third_party/virglrenderer"
+    },
+    "moltenvk": {
+      "submodule": "third_party/moltenvk"
+    },
+    "socket-vmnet": {
+      "submodule": "third_party/socket-vmnet"
+    },
+    "utm": {
+      "submodule": "third_party/utm"
+    },
+    "keycodemapdb": {
+      "submodule": "third_party/keycodemapdb"
+    }
+  }
+}

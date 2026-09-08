@@ -1,0 +1,10 @@
+[Unit]
+Description=Prepare read-only guest video shared memory
+After=systemd-udev-trigger.service
+Before=systemd-user-sessions.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/linuxhost-video-memory
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

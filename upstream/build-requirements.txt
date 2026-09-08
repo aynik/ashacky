@@ -1,0 +1,6 @@
+# Build-time Python tools, installed only in build/python.
+meson==1.12.0
+six==1.17.0
+pyparsing==3.2.3
+PyYAML==6.0.3
+packaging==25.0

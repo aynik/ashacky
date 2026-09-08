@@ -1,0 +1,17 @@
+[Unit]
+Description=LinuxHost Wi-Fi radio power synchronization
+Requires=linuxhost-probe-devices.service
+After=linuxhost-probe-devices.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/linuxhost-probe/wifi_power.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+{
+  "source": "qemu archive in archives.lock.json",
+  "code": "pc-bios/edk2-aarch64-code.fd.bz2",
+  "compression": "bz2",
+  "uncompressedSHA256": "ee769c4bf42a5350d33345fc1b16d00156fe0c25fb3c68debd003bd844e4e3fa",
+  "licenses": "pc-bios/edk2-licenses.txt",
+  "variables": "Create a fresh writable variables image per VM; never commit used firmware variables."
+}

@@ -1,0 +1,3 @@
+#!/bin/bash
+set -euo pipefail
+exec "${ASHACKY_PYTHON:-/usr/bin/python3}" "$(dirname "$0")/vm-ssh.py" "$@"

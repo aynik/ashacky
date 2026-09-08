@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Build the CocoaSpice frontend with Command Line Tools and a pinned UTM shader.
+
+Needs a patched CocoaSpice checkout and matching SPICE/GStreamer pkg-config paths.
+Does not stage QEMU or its graphics dependency closure; see docs/BUILD.md.
+"""
+import argparse
+import os
+from pathlib import Path
+import platform
+import plistlib
+import shlex
+import shutil
+import subprocess
+from sources import Sources
+from utm_assets import UTMAssets
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run(command):
+    subprocess.run([str(item) for item in command], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--compile-shaders', action='store_true',
+                        help='optional source shader build; requires the Metal compiler')
+    args = parser.parse_args()
+    if platform.system() != 'Darwin':
+        raise RuntimeError('The frontend must be built on macOS')
+    if args.compile_shaders:
+        run(['xcrun', '--find', 'metal'])
+        run(['xcrun', '--find', 'metallib'])
+    dependencies = Sources()
+    sources = dependencies.prepare('cocoaspice') / 'Sources'
+    keymap = dependencies.keymap()
+    assets = UTMAssets()
+    if not args.compile_shaders:
+        assets.verify_shader_sources(sources)
+        upstream = assets.prepare()
+    output = ROOT / 'build/host'
+    objects = output / 'frontend-objects'
+    objects.mkdir(parents=True, exist_ok=True)
+    contents = output / 'Ashacky.app/Contents'
+    (contents / 'MacOS').mkdir(parents=True, exist_ok=True)
+    resources = contents / 'Resources'
+    bundle = resources / 'CocoaSpice_CocoaSpiceRenderer.bundle/Contents'
+    if bundle.parent.exists():
+        shutil.rmtree(bundle.parent)
+    if args.compile_shaders:
+        (bundle / 'Resources').mkdir(parents=True, exist_ok=True)
+        (bundle / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'local.ashacky.renderer',
+            'CFBundleName': 'CocoaSpiceRenderer', 'CFBundlePackageType': 'BNDL'}))
+        run(['xcrun', '-sdk', 'macosx', 'metal', '-c', sources / 'CocoaSpiceRenderer/CSShaders.metal',
+             '-I', sources / 'CocoaSpiceRenderer/include', '-o', objects / 'shaders.air'])
+        run(['xcrun', '-sdk', 'macosx', 'metallib', objects / 'shaders.air', '-o', bundle / 'Resources/default.metallib'])
+    else:
+        shutil.copytree(upstream / assets.lock['shaderBundle'], bundle.parent, symlinks=True)
+    # Make the Clang module map a generated build input, never edit upstream source.
+    modulemap = objects / 'module.modulemap'
+    header = sources / 'CocoaSpiceRenderer/include/CocoaSpiceRenderer.h'
+    modulemap.write_text('module CocoaSpiceRenderer { umbrella header "' + str(header) + '" export * }\n')
+    gst = objects / 'gst-init.m'
+    gst.write_text('#include <gst/gst.h>\nvoid gst_ios_init(void) { gst_init(NULL,NULL); }\n')
+    packages = ['glib-2.0', 'gio-2.0', 'gobject-2.0', 'gstreamer-1.0', 'spice-client-glib-2.0', 'libusb-1.0']
+    def pkg(option):
+        return shlex.split(subprocess.check_output(['pkg-config', option, *packages], text=True))
+    flags = pkg('--cflags') + ['-DWITH_USB_SUPPORT', '-fobjc-arc', '-fmodules', '-O2',
+        '-Wno-nullability-completeness', '-fmodule-map-file=' + str(modulemap)]
+    for include in (sources / 'CocoaSpice/include', sources / 'CocoaSpiceRenderer/include',
+                    sources / 'CocoaSpice', ROOT / 'host/frontend', keymap.parent):
+        flags.append('-I' + str(include))
+    inputs = sorted(p for p in (sources / 'CocoaSpice').glob('*.m') if p.name != 'gst_ios_init.m')
+    inputs += sorted((sources / 'CocoaSpiceRenderer').glob('*.m'))
+    inputs += [gst, ROOT / 'host/frontend/main.m']
+    compiled = []
+    for index, source in enumerate(inputs):
+        obj = objects / f'{index}-{source.stem}.o'
+        run(['clang', *flags, '-c', source, '-o', obj])
+        compiled.append(obj)
+    libraries = pkg('--libs')
+    for framework in ('Cocoa', 'Metal', 'MetalKit', 'CoreGraphics', 'IOSurface', 'AVFoundation', 'AudioToolbox'):
+        libraries += ['-framework', framework]
+    run(['clang', *compiled, *libraries, '-o', contents / 'MacOS/LinuxHostSPICE'])
+    (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'local.ashacky.frontend',
+        'CFBundleName': 'Ashacky', 'CFBundleExecutable': 'LinuxHostSPICE', 'CFBundlePackageType': 'APPL',
+        'CFBundleVersion': '1', 'LSMinimumSystemVersion': '12.0', 'NSHighResolutionCapable': True,
+        'NSMicrophoneUsageDescription': 'Send microphone audio to your Linux virtual machine.'}))
+    print(contents.parent)
+    print('Stage the dependency closure and sign the complete bundle before use; see docs/BUILD.md.')
+
+
+if __name__ == '__main__':
+    main()

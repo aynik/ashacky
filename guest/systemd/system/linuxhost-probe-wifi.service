@@ -1,0 +1,12 @@
+[Unit]
+Description=LinuxHost probe Wi-Fi host bridge
+Requires=linuxhost-probe-devices.service
+After=linuxhost-probe-devices.service
+
+[Service]
+ExecStart=/usr/bin/python3 -u /opt/linuxhost-probe/wifi_bridge.py --socket /run/linuxhost-wifi-test.sock
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

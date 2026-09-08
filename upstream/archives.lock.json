@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "archives": {
+    "qemu": {
+      "url": "https://github.com/utmapp/qemu/releases/download/v10.0.12-utm/qemu-10.0.12-utm.tar.xz",
+      "sha256": "7c9605290b34152debb842e965a55d2e4fbba4793e536ab677b4027e5dc0ba1a",
+      "omittedExternalLinks": {
+        "qemu-10.0.12-utm/roms/edk2/EmulatorPkg/Unix/Host/X11IncludeHack": "/opt/X11/include"
+      }
+    }
+  }
+}

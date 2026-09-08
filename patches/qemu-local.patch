@@ -1,0 +1,226 @@
+--- a/ui/spice-display.c
++++ b/ui/spice-display.c
+@@ -1677,6 +1677,53 @@
+ 
+ #endif /* HAVE_SPICE_GL */
+ 
++static GPtrArray *linuxhost_displays;
++
++#if defined(HAVE_SPICE_GL) && defined(CONFIG_IOSURFACE)
++static void spice_refresh_client_scanout(void *opaque)
++{
++    SimpleSpiceDisplay *ssd = opaque;
++    int fourcc, fd;
++    if (!ssd->have_scanout || !ssd->iosurface) {
++        return;
++    }
++    /* A pipe transports the surface ID, not persistent bytes. A new client
++     * needs a fresh pipe even when the guest has not changed its scanout. */
++    fd = spice_iosurface_create_fd(ssd, &fourcc);
++    if (fd < 0) {
++        return;
++    }
++    spice_qxl_gl_scanout(&ssd->qxl, fd,
++                        IOSurfaceGetWidth(ssd->iosurface),
++                        IOSurfaceGetHeight(ssd->iosurface),
++                        IOSurfaceGetBytesPerRow(ssd->iosurface),
++                        fourcc, ssd->y_0_top);
++    qemu_spice_gl_monitor_config(ssd, ssd->scanout_last_x, ssd->scanout_last_y,
++                                ssd->scanout_last_w, ssd->scanout_last_h);
++    if (!qemu_console_is_gl_blocked(ssd->dcl.con)) {
++        qemu_spice_gl_update(&ssd->dcl, 0, 0,
++                            ssd->scanout_last_w, ssd->scanout_last_h);
++    }
++}
++#endif
++
++void qemu_spice_display_client_connected(int channel_id)
++{
++#if defined(HAVE_SPICE_GL) && defined(CONFIG_IOSURFACE)
++    if (!linuxhost_displays) {
++        return;
++    }
++    for (guint i = 0; i < linuxhost_displays->len; i++) {
++        SimpleSpiceDisplay *ssd = g_ptr_array_index(linuxhost_displays, i);
++        if (ssd->qxl.id == channel_id) {
++            /* Leave the server's channel callback before changing scanout. */
++            aio_bh_schedule_oneshot(qemu_get_aio_context(),
++                                   spice_refresh_client_scanout, ssd);
++        }
++    }
++#endif
++}
++
+ static void qemu_spice_display_init_one(QemuConsole *con)
+ {
+     SimpleSpiceDisplay *ssd = g_new0(SimpleSpiceDisplay, 1);
+@@ -1708,6 +1755,10 @@
+ 
+     ssd->qxl.base.sif = &dpy_interface.base;
+     qemu_spice_add_display_interface(&ssd->qxl, con);
++    if (!linuxhost_displays) {
++        linuxhost_displays = g_ptr_array_new();
++    }
++    g_ptr_array_add(linuxhost_displays, ssd);
+ 
+ #if SPICE_SERVER_VERSION >= 0x000e02 /* release 0.14.2 */
+     Error *err = NULL;
+--- a/ui/spice-core.c
++++ b/ui/spice-core.c
+@@ -250,6 +250,9 @@
+         }
+         add_channel_info(client, info);
+         channel_list_add(info);
++        if (info->type == SPICE_CHANNEL_DISPLAY) {
++            qemu_spice_display_client_connected(info->id);
++        }
+         qapi_event_send_spice_initialized(server, client);
+         break;
+     case SPICE_CHANNEL_EVENT_DISCONNECTED:
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -107,6 +107,21 @@
+ static QemuCocoaPasteboardTypeOwner *cbowner;
+ 
+ #ifdef CONFIG_OPENGL
++
++/* LinuxHost: borderless presentation, independent of native fullscreen Spaces.
++ * Ctrl-Alt-Shift-F12 returns to an ordinary window (and toggles back).
++ */
++static bool linuxhost_kiosk;
++static bool linuxhost_kiosk_configured;
++@interface LinuxHostWindow : NSWindow
++@end
++@implementation LinuxHostWindow
++- (BOOL)canBecomeKeyWindow { return YES; }
++- (BOOL)canBecomeMainWindow { return YES; }
++- (NSRect)constrainFrameRect:(NSRect)rect toScreen:(NSScreen *)screen {
++    return linuxhost_kiosk ? rect : [super constrainFrameRect:rect toScreen:screen];
++}
++@end
+ 
+ @interface QemuCGLLayer : CAOpenGLLayer
+ @end
+@@ -660,6 +675,12 @@
+ 
+ - (void) resizeWindow
+ {
++    if (linuxhost_kiosk) {
++        NSWindow *w = [self window];
++        NSScreen *screen = [w screen] ?: [NSScreen mainScreen];
++        if (w && screen && !NSEqualRects([w frame], [screen frame])) [w setFrame:[screen frame] display:YES];
++        return;
++    }
+     [[self window] setContentAspectRatio:NSMakeSize(screen.width, screen.height)];
+ 
+     if (!([[self window] styleMask] & NSWindowStyleMaskResizable)) {
+@@ -879,6 +900,15 @@
+ 
+ - (bool) handleEvent:(NSEvent *)event
+ {
++    if (linuxhost_kiosk_configured &&
++        ([event type] == NSEventTypeKeyDown || [event type] == NSEventTypeKeyUp) &&
++        [event keyCode] == 111 &&
++        ([event modifierFlags] & (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) == (NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)) {
++        if ([event type] == NSEventTypeKeyDown && ![event isARepeat]) {
++            [[NSApp delegate] performSelector:@selector(doToggleFullScreen:) withObject:nil];
++        }
++        return true;
++    }
+     return bool_with_bql(^{
+         return [self handleEventLocked:event];
+     });
+@@ -1440,7 +1470,7 @@
+ 
+     self = [super init];
+     if (self) {
+-        NSRect frame = NSMakeRect(0.0, 0.0, 640.0, 480.0);
++        NSRect frame = linuxhost_kiosk ? [[NSScreen mainScreen] frame] : NSMakeRect(0.0, 0.0, 640.0, 480.0);
+ 
+         // create a view and add it to the window
+ #ifdef CONFIG_OPENGL
+@@ -1458,20 +1488,25 @@
+         }
+ 
+         // create a window
+-        window = [[NSWindow alloc] initWithContentRect:frame
+-            styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskClosable
++        window = [[LinuxHostWindow alloc] initWithContentRect:frame
++            styleMask:(linuxhost_kiosk ? NSWindowStyleMaskBorderless : NSWindowStyleMaskTitled|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskClosable)
+             backing:NSBackingStoreBuffered defer:NO];
+         if(!window) {
+             error_report("(cocoa) can't create window");
+             exit(1);
+         }
+         [window setAcceptsMouseMovedEvents:YES];
+-        [window setCollectionBehavior:NSWindowCollectionBehaviorFullScreenPrimary];
++        [window setCollectionBehavior:linuxhost_kiosk ? NSWindowCollectionBehaviorFullScreenNone : NSWindowCollectionBehaviorFullScreenPrimary];
++        [window setBackgroundColor:[NSColor blackColor]];
++        if (linuxhost_kiosk) {
++            [NSApp setPresentationOptions:NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar];
++        }
+         [window setTitle:qemu_name ? [NSString stringWithFormat:@"QEMU %s", qemu_name] : @"QEMU"];
+         [window setContentView:cocoaView];
+         [window makeKeyAndOrderFront:self];
+-        [window center];
++        if (!linuxhost_kiosk) [window center];
+         [window setDelegate: self];
++        fprintf(stderr, "LinuxHost first window: kiosk=%d nativeFullscreen=%d frame=%s\n", linuxhost_kiosk, !!([window styleMask] & NSWindowStyleMaskFullScreen), [NSStringFromRect([window frame]) UTF8String]);
+ 
+         /* Used for displaying pause on the screen */
+         pauseLabel = [NSTextField new];
+@@ -1596,6 +1631,19 @@
+  */
+ - (void) doToggleFullScreen:(id)sender
+ {
++    if (linuxhost_kiosk_configured) {
++        NSWindow *w = [cocoaView window];
++        linuxhost_kiosk = !linuxhost_kiosk;
++        [cocoaView ungrabMouse];
++        [NSApp setPresentationOptions:linuxhost_kiosk ? NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar : NSApplicationPresentationDefault];
++        [w setStyleMask:linuxhost_kiosk ? NSWindowStyleMaskBorderless : NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable];
++        [w setCollectionBehavior:NSWindowCollectionBehaviorFullScreenNone];
++        if (linuxhost_kiosk) [w setFrame:[[w screen] frame] display:YES];
++        else { [w setContentSize:NSMakeSize(960,600)]; [w center]; }
++        [w makeKeyAndOrderFront:nil];
++        [cocoaView updateUIInfo];
++        return;
++    }
+     [[cocoaView window] toggleFullScreen:sender];
+ }
+ 
+@@ -2491,6 +2539,8 @@
+ 
+ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
+ {
++    linuxhost_kiosk_configured = getenv("LINUXHOST_KIOSK") && strcmp(getenv("LINUXHOST_KIOSK"), "1") == 0;
++    linuxhost_kiosk = linuxhost_kiosk_configured;
+     NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
+     QemuCocoaAppController *controller;
+ 
+@@ -2576,7 +2626,7 @@
+     }
+ 
+     /* if fullscreen mode is to be used */
+-    if (opts->has_full_screen && opts->full_screen) {
++    if (!linuxhost_kiosk_configured && opts->has_full_screen && opts->full_screen) {
+         [[cocoaView window] toggleFullScreen: nil];
+     }
+     if (opts->u.cocoa.has_full_grab && opts->u.cocoa.full_grab) {
+--- a/include/ui/spice-display.h
++++ b/include/ui/spice-display.h
+@@ -237,3 +237,6 @@
+ #endif
+ 
+ #endif
++
++/* Called with the BQL held when a display client has authenticated. */
++void qemu_spice_display_client_connected(int channel_id);
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -157,3 +157,5 @@
+ 
+ # HPPA devices
+ system_ss.add(when: 'CONFIG_LASI', if_true: files('lasi.c'))
++
++system_ss.add(when: 'CONFIG_PCI', if_true: files('linuxhost-shmem.c'))

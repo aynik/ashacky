@@ -1,0 +1,13 @@
+[Unit]
+Description=LinuxHost probe reader-driven camera bridge
+Requires=linuxhost-probe-devices.service
+After=linuxhost-probe-devices.service
+
+[Service]
+ExecStart=/usr/bin/python3 -u /opt/linuxhost-probe/camera_demand.py --monitor /opt/linuxhost-probe/camera-readers
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,1482 @@
+--- a/src/rockchip_drv_video.c
++++ b/src/rockchip_drv_video.c
+@@ -1,3 +1,8 @@
++#define _GNU_SOURCE
++#include <stdint.h>
++#include <va/va.h>
++#include <va/va_dec_vp9.h>
++#include "graphics.h"
+ /*
+  * rockchip_drv_video.c — VA-API driver for Rockchip RK3588 via MPP
+  *
+@@ -19,13 +24,16 @@
+  */
+ 
+ #define _GNU_SOURCE
++#include <stdint.h>
++#include <va/va.h>
++#include <va/va_dec_vp9.h>
++#include "graphics.h"
+ #include <va/va_backend.h>
+ #include <va/va_drmcommon.h>
+-#include <rockchip/rk_mpi.h>
+-#include <rockchip/mpp_frame.h>
+-#include <rockchip/mpp_packet.h>
+-#include <rockchip/mpp_buffer.h>
+-
++#include <dlfcn.h>
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <sys/time.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -35,18 +43,28 @@
+ #include <fcntl.h>
+ #include <pthread.h>
+ #include <sys/ioctl.h>
++#include <sys/mman.h>
++#include <stdatomic.h>
+ #include <errno.h>
+ 
+ #include "h264.h"
++static int lh_allow_4k(void){const char *v=getenv("LH_VIDEO_ALLOW_4K");return v?strcmp(v,"0")!=0:access("/run/linuxhost-video/resource",R_OK)==0;}
++static const char *lh_socket_path(void){
++ const char *override=getenv("LH_VIDEO_SOCKET");if(override&&*override)return override;
++ static _Thread_local char path[108];const char *runtime=getenv("XDG_RUNTIME_DIR");
++ int n=runtime?snprintf(path,sizeof(path),"%s/linuxhost-video/decoder-direct.sock",runtime):snprintf(path,sizeof(path),"/run/user/%lu/linuxhost-video/decoder-direct.sock",(unsigned long)getuid());
++ return n>0&&n<(int)sizeof(path)?path:NULL;
++}
++
+ 
+ /* ── logging ─────────────────────────────────────────────────── */
+ static FILE *g_log_fp = NULL;
+ static void log_init(void) {
+-    const char *p = getenv("RK_VAAPI_LOG");
++    const char *p = getenv("LH_VAAPI_LOG");
+     if (p && *p) g_log_fp = fopen(p, "a");
+ }
+ #define LOG(fmt, ...) do { if (g_log_fp) \
+-    fprintf(g_log_fp, "[rk-vaapi pid=%d] " fmt "\n", getpid(), ##__VA_ARGS__); \
++    fprintf(g_log_fp, "[lh-vaapi pid=%d] " fmt "\n", getpid(), ##__VA_ARGS__); \
+ } while(0)
+ 
+ /* ── limits ──────────────────────────────────────────────────── */
+@@ -74,9 +92,9 @@
+     VAConfigID   config_id;
+     int          width, height;
+ 
+-    MppCtx       mpp;
+-    MppApi      *mpi;
+-    MppCodingType coding;
++    int fd;
++    int coding;
++    unsigned frame_index;
+ 
+     /* buffers collected between BeginPicture / EndPicture */
+     VABufferID   pending[64];
+@@ -97,22 +115,11 @@
+     bool         used;
+     int          width, height;
+ 
+-    /* filled after decode */
+-    MppFrame     frame;          /* always NULL (kept for ABI compat) */
+-    int          prime_fd;       /* dup'd fd to priv_buf, stable for surface lifetime */
+-    int          hstride;
+-    int          vstride;
+-
+-    /* Dedicated per-surface DMA-BUF used as permanent output buffer.
+-     * Decoded pixels are copied here in assign_mpp_frame so MPP can
+-     * immediately reuse its internal 3-buffer pool, preventing the
+-     * buffer aliasing that causes wrong frames in Firefox's compositor.
+-     * Also serves as the pre-decode placeholder for ExportSurfaceHandle
+-     * capability probes (Firefox DMABUF probe before any decode). */
+-    MppBufferGroup priv_group;
+-    MppBuffer      priv_buf;
+-
+-    MppFrameFormat fmt;     /* pixel format of last decoded frame (0 = NV12 default) */
++    int prime_fd;
++    int hstride, vstride;
++    uint8_t *pixels;
++    unsigned bytes;
++    struct LHFrame *gpu;
+     bool         decoded;
+     VAContextID  ctx_id;   /* context currently decoding into this surface */
+     pthread_mutex_t  lock;
+@@ -128,6 +135,8 @@
+ } RKBuffer;
+ 
+ typedef struct {
++    struct LHGraphics *graphics;
++    const unsigned char *shared; bool own_shared;
+     RKConfig   configs [MAX_CONFIGS];
+     RKContext  contexts[MAX_CONTEXTS];
+     RKSurface  surfaces[MAX_SURFACES];
+@@ -160,22 +169,7 @@
+     return (idx < MAX_BUFFERS && d->buffers[idx].used) ? &d->buffers[idx] : NULL;
+ }
+ 
+-static MppCodingType profile_to_coding(VAProfile p) {
+-    switch (p) {
+-    case VAProfileH264ConstrainedBaseline:
+-    case VAProfileH264Main:
+-    case VAProfileH264High:
+-    case VAProfileH264High10:    return MPP_VIDEO_CodingAVC;
+-    case VAProfileHEVCMain:
+-    case VAProfileHEVCMain10:    return MPP_VIDEO_CodingHEVC;
+-    case VAProfileVP8Version0_3: return MPP_VIDEO_CodingVP8;
+-    case VAProfileVP9Profile0:
+-    case VAProfileVP9Profile2:   return MPP_VIDEO_CodingVP9;
+-    case VAProfileAV1Profile0:
+-    case VAProfileAV1Profile1:   return MPP_VIDEO_CodingAV1;
+-    default:                     return MPP_VIDEO_CodingUnused;
+-    }
+-}
++static int profile_to_coding(VAProfile p) {if((p==VAProfileVP9Profile0||p==VAProfileVP9Profile2))return 3;return p==VAProfileH264ConstrainedBaseline || p==VAProfileH264Main || p==VAProfileH264High ? 1 : 0;}
+ 
+ static int profile_idc(VAProfile p) {
+     switch (p) {
+@@ -189,58 +183,15 @@
+ 
+ /* ── VADriverVTable implementations ──────────────────────────── */
+ 
+-static VAStatus rk_Terminate(VADriverContextP ctx) {
+-    LOG("Terminate: cleaning up driver");
+-    RKDriver *d = drv_from_ctx(ctx);
+-    if (!d) return VA_STATUS_SUCCESS;
+-
+-    /* destroy any leftover objects */
+-    for (int i = 0; i < MAX_SURFACES; i++) {
+-        if (!d->surfaces[i].used) continue;
+-        if (d->surfaces[i].frame) mpp_frame_deinit(&d->surfaces[i].frame);
+-        if (d->surfaces[i].prime_fd >= 0) close(d->surfaces[i].prime_fd);
+-        if (d->surfaces[i].priv_buf)   mpp_buffer_put(d->surfaces[i].priv_buf);
+-        if (d->surfaces[i].priv_group) mpp_buffer_group_put(d->surfaces[i].priv_group);
+-        pthread_cond_destroy(&d->surfaces[i].cond);
+-        pthread_mutex_destroy(&d->surfaces[i].lock);
+-    }
+-    for (int i = 0; i < MAX_CONTEXTS; i++) {
+-        if (!d->contexts[i].used) continue;
+-        if (d->contexts[i].mpp) mpp_destroy(d->contexts[i].mpp);
+-    }
+-    for (int i = 0; i < MAX_BUFFERS; i++) {
+-        if (d->buffers[i].used) free(d->buffers[i].data);
+-    }
+-    free(d);
+-    ctx->pDriverData = NULL;
+-    return VA_STATUS_SUCCESS;
+-}
+-
+-static VAStatus rk_QueryConfigProfiles(VADriverContextP ctx,
+-                                       VAProfile *list, int *n) {
+-    (void)ctx;
+-    int i = 0;
+-    list[i++] = VAProfileH264ConstrainedBaseline;
+-    list[i++] = VAProfileH264Main;
+-    list[i++] = VAProfileH264High;
+-    list[i++] = VAProfileH264High10;
+-    list[i++] = VAProfileHEVCMain;
+-    list[i++] = VAProfileHEVCMain10;
+-    list[i++] = VAProfileVP8Version0_3;
+-    list[i++] = VAProfileVP9Profile0;
+-    list[i++] = VAProfileVP9Profile2;
+-    /* AV1 not advertised: MPP needs a full OBU bytestream but VA-API hands us
+-     * only headerless tile data, so MPP can never parse it. Firefox falls back
+-     * to VP9 (hardware-decoded) for AV1-capable content. */
+-    *n = i;
+-    return VA_STATUS_SUCCESS;
+-}
++static VAStatus rk_Terminate(VADriverContextP ctx){RKDriver*d=drv_from_ctx(ctx);if(!d)return 0;for(int i=0;i<MAX_SURFACES;i++)if(d->surfaces[i].used){lh_frame_free(d->graphics,d->surfaces[i].gpu);free(d->surfaces[i].pixels);pthread_cond_destroy(&d->surfaces[i].cond);pthread_mutex_destroy(&d->surfaces[i].lock);}for(int i=0;i<MAX_CONTEXTS;i++)if(d->contexts[i].used&&d->contexts[i].fd>=0)close(d->contexts[i].fd);for(int i=0;i<MAX_BUFFERS;i++)if(d->buffers[i].used)free(d->buffers[i].data);lh_graphics_free(d->graphics);if(d->own_shared)munmap((void*)d->shared,64u*1024*1024);free(d);ctx->pDriverData=NULL;return 0;}
++
++static VAStatus rk_QueryConfigProfiles(VADriverContextP ctx, VAProfile *l,int*n){(void)ctx;l[0]=VAProfileH264ConstrainedBaseline;l[1]=VAProfileH264Main;l[2]=VAProfileH264High;l[3]=VAProfileVP9Profile0;l[4]=VAProfileVP9Profile2;*n=5;return 0;}
+ 
+ static VAStatus rk_QueryConfigEntrypoints(VADriverContextP ctx,
+                                           VAProfile profile,
+                                           VAEntrypoint *list, int *n) {
+     (void)ctx;
+-    if (profile_to_coding(profile) == MPP_VIDEO_CodingUnused)
++    if (profile_to_coding(profile) == 0)
+         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+     list[0] = VAEntrypointVLD;
+     *n = 1;
+@@ -256,7 +207,7 @@
+         LOG("GetConfigAttributes: type=%d", list[i].type);
+         switch (list[i].type) {
+         case VAConfigAttribRTFormat:
+-            list[i].value = VA_RT_FORMAT_YUV420 | VA_RT_FORMAT_YUV420_10;
++            list[i].value = profile==VAProfileVP9Profile2?VA_RT_FORMAT_YUV420_10:VA_RT_FORMAT_YUV420;
+             break;
+         case VAConfigAttribDecSliceMode:
+             list[i].value = VA_DEC_SLICE_MODE_NORMAL;
+@@ -280,7 +231,7 @@
+     LOG("CreateConfig: profile=%d entrypoint=%d n_attribs=%d",
+         profile, entrypoint, n_attribs);
+ 
+-    if (profile_to_coding(profile) == MPP_VIDEO_CodingUnused) {
++    if (profile_to_coding(profile) == 0) {
+         LOG("CreateConfig: unsupported profile %d", profile);
+         return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+     }
+@@ -326,95 +277,12 @@
+ }
+ 
+ /* vaCreateSurfaces (old API, redirected) */
+-static VAStatus rk_CreateSurfaces(VADriverContextP ctx,
+-                                   int width, int height, int format,
+-                                   int n, VASurfaceID *ids) {
+-    RKDriver *d = drv_from_ctx(ctx);
+-    (void)format;
+-
+-    int allocated = 0;
+-    for (int s = 0; s < n; s++) {
+-        unsigned i;
+-        for (i = 0; i < MAX_SURFACES; i++) {
+-            if (!d->surfaces[i].used) break;
+-        }
+-        if (i == MAX_SURFACES) {
+-            /* roll back — must free placeholder buffers before zeroing */
+-            for (int j = 0; j < allocated; j++) {
+-                unsigned idx = ids[j] - SURFACE_ID_BASE;
+-                RKSurface *rb = &d->surfaces[idx];
+-                if (rb->prime_fd >= 0) close(rb->prime_fd);
+-                if (rb->priv_buf)   mpp_buffer_put(rb->priv_buf);
+-                if (rb->priv_group) mpp_buffer_group_put(rb->priv_group);
+-                pthread_mutex_destroy(&rb->lock);
+-                pthread_cond_destroy(&rb->cond);
+-                memset(rb, 0, sizeof(RKSurface));
+-            }
+-            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+-        }
+-        RKSurface *surf = &d->surfaces[i];
+-        memset(surf, 0, sizeof(*surf));
+-        surf->used     = true;
+-        surf->width    = width;
+-        surf->height   = height;
+-        surf->prime_fd = -1;
+-
+-        /* Pre-allocate placeholder DMA-BUF so ExportSurfaceHandle succeeds
+-         * before any decode (e.g. Firefox's DMABUF capability probe). */
+-        {
+-            unsigned hs = (unsigned)((width  + 15) & ~15);
+-            unsigned vs = (unsigned)((height + 15) & ~15);
+-            MppBufferGroup grp = NULL;
+-            MppBuffer      buf = NULL;
+-            if (mpp_buffer_group_get_internal(&grp, MPP_BUFFER_TYPE_DRM) == MPP_OK &&
+-                mpp_buffer_get(grp, &buf, hs * vs * 3) == MPP_OK) {
+-                int raw_fd = mpp_buffer_get_fd(buf);
+-                int dup_fd = (raw_fd > 0) ? dup(raw_fd) : -1;
+-                if (dup_fd > 0) {
+-                    surf->priv_group = grp;
+-                    surf->priv_buf   = buf;
+-                    surf->prime_fd   = dup_fd;
+-                    surf->hstride    = (int)hs;
+-                    surf->vstride    = (int)vs;
+-                    LOG("CreateSurfaces: surface %ux%u placeholder prime_fd=%d",
+-                        (unsigned)width, (unsigned)height, surf->prime_fd);
+-                } else {
+-                    LOG("CreateSurfaces: mpp_buffer_get_fd failed (raw_fd=%d), no placeholder", raw_fd);
+-                    mpp_buffer_put(buf);
+-                    mpp_buffer_group_put(grp);
+-                }
+-            } else {
+-                if (buf) mpp_buffer_put(buf);
+-                if (grp) mpp_buffer_group_put(grp);
+-                LOG("CreateSurfaces: placeholder alloc failed, prime_fd=-1");
+-            }
+-        }
+-
+-        pthread_mutex_init(&surf->lock, NULL);
+-        pthread_cond_init(&surf->cond, NULL);
+-        ids[s] = SURFACE_ID_BASE + i;
+-        allocated++;
+-    }
+-    return VA_STATUS_SUCCESS;
+-}
+-
+-static VAStatus rk_DestroySurfaces(VADriverContextP ctx,
+-                                    VASurfaceID *list, int n) {
+-    LOG("DestroySurfaces: n=%d", n);
+-    RKDriver *d = drv_from_ctx(ctx);
+-    for (int i = 0; i < n; i++) {
+-        RKSurface *s = surface_by_id(d, list[i]);
+-        if (!s) continue;
+-        if (s->frame)      mpp_frame_deinit(&s->frame);
+-        if (s->prime_fd >= 0) close(s->prime_fd);
+-        if (s->priv_buf)   { mpp_buffer_put(s->priv_buf);        s->priv_buf   = NULL; }
+-        if (s->priv_group) { mpp_buffer_group_put(s->priv_group); s->priv_group = NULL; }
+-        pthread_cond_destroy(&s->cond);
+-        pthread_mutex_destroy(&s->lock);
+-        memset(s, 0, sizeof(*s));
+-    }
+-    return VA_STATUS_SUCCESS;
+-}
++static VAStatus rk_CreateSurfaces(VADriverContextP ctx,int w,int h,int format,int n,VASurfaceID*ids){
++ RKDriver*d=drv_from_ctx(ctx);if(w<2||h<2||w>4096||h>4096||(w&1)||(h&1)||n<1||n>MAX_SURFACES||(format!=VA_RT_FORMAT_YUV420&&format!=VA_RT_FORMAT_YUV420_10))return VA_STATUS_ERROR_INVALID_PARAMETER;
++ int free_slots=0;for(int i=0;i<MAX_SURFACES;i++)free_slots+=!d->surfaces[i].used;if(n>free_slots)return VA_STATUS_ERROR_ALLOCATION_FAILED;
++ for(int k=0;k<n;k++){int i=0;while(d->surfaces[i].used)i++;RKSurface*t=&d->surfaces[i];memset(t,0,sizeof *t);t->bytes=format==VA_RT_FORMAT_YUV420_10?2:1;t->pixels=calloc(1,(size_t)w*h*3/2*t->bytes);if(!t->pixels)return VA_STATUS_ERROR_ALLOCATION_FAILED;t->used=true;t->width=w;t->height=h;t->hstride=w;t->vstride=h;t->prime_fd=-1;pthread_mutex_init(&t->lock,NULL);pthread_cond_init(&t->cond,NULL);ids[k]=SURFACE_ID_BASE+i;}return 0;}
++
++static VAStatus rk_DestroySurfaces(VADriverContextP ctx,VASurfaceID*ids,int n){RKDriver*d=drv_from_ctx(ctx);for(int i=0;i<n;i++){RKSurface*t=surface_by_id(d,ids[i]);if(!t)return VA_STATUS_ERROR_INVALID_SURFACE;lh_frame_free(d->graphics,t->gpu);free(t->pixels);pthread_mutex_destroy(&t->lock);pthread_cond_destroy(&t->cond);memset(t,0,sizeof *t);}return 0;}
+ 
+ /* vaCreateSurfaces2 (new API with attributes) */
+ static VAStatus rk_CreateSurfaces2(VADriverContextP ctx,
+@@ -435,78 +303,11 @@
+                               (int)n, ids);
+ }
+ 
+-static VAStatus rk_CreateContext(VADriverContextP ctx,
+-                                  VAConfigID config_id,
+-                                  int width, int height,
+-                                  int flag,
+-                                  VASurfaceID *targets, int n_targets,
+-                                  VAContextID *out_id) {
+-    RKDriver *d = drv_from_ctx(ctx);
+-    (void)flag; (void)targets; (void)n_targets;
+-
+-    RKConfig *cfg = config_by_id(d, config_id);
+-    if (!cfg) return VA_STATUS_ERROR_INVALID_CONFIG;
+-
+-    MppCodingType coding = profile_to_coding(cfg->profile);
+-    if (coding == MPP_VIDEO_CodingUnused)
+-        return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+-
+-    for (unsigned i = 0; i < MAX_CONTEXTS; i++) {
+-        if (d->contexts[i].used) continue;
+-        RKContext *c = &d->contexts[i];
+-        memset(c, 0, sizeof(*c));
+-
+-        LOG("CreateContext: config=0x%x %dx%d coding=%d",
+-            config_id, width, height, (int)coding);
+-
+-        MPP_RET ret = mpp_create(&c->mpp, &c->mpi);
+-        if (ret != MPP_OK) {
+-            LOG("mpp_create FAILED: %d", ret);
+-            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+-        }
+-        LOG("CreateContext: mpp_create OK");
+-
+-        ret = mpp_init(c->mpp, MPP_CTX_DEC, coding);
+-        if (ret != MPP_OK) {
+-            mpp_destroy(c->mpp);
+-            LOG("mpp_init FAILED: %d (coding=%d)", ret, (int)coding);
+-            return VA_STATUS_ERROR_ALLOCATION_FAILED;
+-        }
+-        LOG("CreateContext: mpp_init OK");
+-
+-        /* Must be set after mpp_init: split_parse=0 means we send complete
+-         * access units; OUTPUT_BLOCK=0 makes decode_get_frame non-blocking. */
+-        MppDecCfg dec_cfg = NULL;
+-        mpp_dec_cfg_init(&dec_cfg);
+-        mpp_dec_cfg_set_u32(dec_cfg, "base:split_parse", 0);
+-        c->mpi->control(c->mpp, MPP_DEC_SET_CFG, dec_cfg);
+-        mpp_dec_cfg_deinit(dec_cfg);
+-
+-        int block = 0;
+-        c->mpi->control(c->mpp, MPP_SET_OUTPUT_BLOCK, (MppParam)&block);
+-
+-        c->used      = true;
+-        c->config_id = config_id;
+-        c->width     = width;
+-        c->height    = height;
+-        c->coding    = coding;
+-        c->sps_sent  = false;
+-
+-        *out_id = CONTEXT_ID_BASE + i;
+-        return VA_STATUS_SUCCESS;
+-    }
+-    return VA_STATUS_ERROR_ALLOCATION_FAILED;
+-}
+-
+-static VAStatus rk_DestroyContext(VADriverContextP ctx, VAContextID id) {
+-    LOG("DestroyContext: ctx=0x%x", id);
+-    RKDriver *d = drv_from_ctx(ctx);
+-    RKContext *c = context_by_id(d, id);
+-    if (!c) return VA_STATUS_ERROR_INVALID_CONTEXT;
+-    if (c->mpp) mpp_destroy(c->mpp);
+-    memset(c, 0, sizeof(*c));
+-    return VA_STATUS_SUCCESS;
+-}
++static VAStatus rk_CreateContext(VADriverContextP ctx,VAConfigID id,int w,int h,int flag,VASurfaceID*targets,int nt,VAContextID*out){
++ RKDriver*d=drv_from_ctx(ctx);RKConfig*cfg=config_by_id(d,id);if(!cfg)return VA_STATUS_ERROR_INVALID_CONFIG;if(profile_to_coding(cfg->profile)==3&&(w>((cfg->profile==VAProfileVP9Profile0&&lh_allow_4k())?3840:1920)||h>((cfg->profile==VAProfileVP9Profile0&&lh_allow_4k())?2160:1088)))return VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED;if(w<1||h<1||w>4096||h>4096)return VA_STATUS_ERROR_INVALID_PARAMETER;
++ for(int i=0;i<MAX_CONTEXTS;i++)if(!d->contexts[i].used){RKContext*c=&d->contexts[i];memset(c,0,sizeof *c);c->used=true;c->config_id=id;c->width=w;c->height=h;c->coding=profile_to_coding(cfg->profile);c->fd=-1;*out=CONTEXT_ID_BASE+i;return 0;}return VA_STATUS_ERROR_ALLOCATION_FAILED;}
++
++static VAStatus rk_DestroyContext(VADriverContextP ctx,VAContextID id){RKContext*c=context_by_id(drv_from_ctx(ctx),id);if(!c)return VA_STATUS_ERROR_INVALID_CONTEXT;if(c->fd>=0)close(c->fd);memset(c,0,sizeof *c);return 0;}
+ 
+ static VAStatus rk_CreateBuffer(VADriverContextP ctx,
+                                  VAContextID context,
+@@ -517,6 +318,7 @@
+                                  VABufferID *out_id) {
+     RKDriver *d = drv_from_ctx(ctx);
+     (void)context;
++    if (!size || !num_elements || (size_t)size*num_elements > (type==VAImageBufferType?64:16)*1024*1024) return VA_STATUS_ERROR_INVALID_PARAMETER;
+ 
+     for (unsigned i = 0; i < MAX_BUFFERS; i++) {
+         if (d->buffers[i].used) continue;
+@@ -543,6 +345,7 @@
+     RKDriver *d = drv_from_ctx(ctx);
+     RKBuffer *b = buffer_by_id(d, id);
+     if (!b) return VA_STATUS_ERROR_INVALID_BUFFER;
++    if (n > b->num_elements) return VA_STATUS_ERROR_INVALID_PARAMETER;
+     b->num_elements = n;
+     return VA_STATUS_SUCCESS;
+ }
+@@ -602,12 +405,14 @@
+     RKContext *c = context_by_id(d, ctx_id);
+     if (!c) return VA_STATUS_ERROR_INVALID_CONTEXT;
+ 
+-    for (int i = 0; i < n && c->n_pending < 64; i++) {
++    if(n<0 || n>64-c->n_pending)return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
++    for (int i = 0; i < n; i++) {
+         c->pending[c->n_pending++] = buffers[i];
+         /* Snapshot VAPictureParameterBufferH264 immediately */
+         RKBuffer *b = buffer_by_id(d, buffers[i]);
+         if (b && b->type == VAPictureParameterBufferType &&
+-            c->coding == MPP_VIDEO_CodingAVC) {
++            c->coding == 1) {
++            if ((size_t)b->size*b->num_elements < sizeof c->last_pp) return VA_STATUS_ERROR_INVALID_BUFFER;
+             memcpy(&c->last_pp, b->data,
+                    sizeof(VAPictureParameterBufferH264));
+         }
+@@ -615,397 +420,55 @@
+     return VA_STATUS_SUCCESS;
+ }
+ 
+-/* Route one MPP output frame to the right surface and mark it decoded.
+- * Shared by EndPicture poll loops and the SyncSurface drain loop. */
+-static void assign_mpp_frame(MppFrame frame, RKContext *c, RKDriver *d)
+-{
+-    if (mpp_frame_get_info_change(frame)) {
+-        LOG("assign_mpp_frame: info_change → acknowledged, render_target=0x%x",
+-            (unsigned)c->render_target);
+-        c->mpi->control(c->mpp, MPP_DEC_SET_INFO_CHANGE_READY, NULL);
+-        mpp_frame_deinit(&frame);
+-        return;
+-    }
+-
+-    RK_S64      raw_pts = mpp_frame_get_pts(frame);
+-    VASurfaceID sid     = (VASurfaceID)raw_pts;
+-    RKSurface  *s       = sid ? surface_by_id(d, sid) : NULL;
+-
+-    if (!s) {
+-        if (c->coding == MPP_VIDEO_CodingAVC) {
+-            sid = c->render_target;
+-        } else if (c->dq_head != c->dq_tail) {
+-            sid = c->decode_queue[c->dq_head];
+-            c->dq_head = (c->dq_head + 1) & 63;
+-            LOG("assign_mpp_frame: PTS=0x%llx unmapped, FIFO → surface=0x%x",
+-                (unsigned long long)raw_pts, (unsigned)sid);
+-        }
+-        s = sid ? surface_by_id(d, sid) : NULL;
+-    } else if (c->coding != MPP_VIDEO_CodingAVC) {
+-        /* PTS valid — advance FIFO head only if this surface is at the front */
+-        if (c->dq_head != c->dq_tail && c->decode_queue[c->dq_head] == sid)
+-            c->dq_head = (c->dq_head + 1) & 63;
+-    }
+-
+-    if (!s) {
+-        LOG("assign_mpp_frame: PTS=0x%llx surface not found, dropped",
+-            (unsigned long long)raw_pts);
+-        mpp_frame_deinit(&frame);
+-        return;
+-    }
+-
+-    MppBuffer      buf    = mpp_frame_get_buffer(frame);
+-    int            fwidth = (int)mpp_frame_get_width(frame);
+-    int            fheight= (int)mpp_frame_get_height(frame);
+-    int            fhs    = (int)mpp_frame_get_hor_stride(frame);
+-    int            fvs    = (int)mpp_frame_get_ver_stride(frame);
+-    MppFrameFormat ffmt   = mpp_frame_get_fmt(frame);
+-
+-    int  copy_w = fwidth  > 0 ? fwidth  : s->width;
+-    int  copy_h = fheight > 0 ? fheight : s->height;
+-    int  src_hs = fhs > 0 ? fhs : copy_w;
+-    int  src_vs = fvs > 0 ? fvs : copy_h;
+-    bool i10    = MPP_FRAME_FMT_IS_YUV_10BIT(ffmt);
+-    int  bpp    = i10 ? 2 : 1;
+-    int  copied = 0;
+-    void *src = buf ? mpp_buffer_get_ptr(buf) : NULL;
+-    void *dst = s->priv_buf ? mpp_buffer_get_ptr(s->priv_buf) : NULL;
+-    if (src && dst) {
+-        const uint8_t *sy = (const uint8_t *)src;
+-        uint8_t       *dy = (uint8_t       *)dst;
+-        for (int r = 0; r < copy_h; r++)
+-            memcpy(dy + (size_t)r * src_hs * bpp,
+-                   sy + (size_t)r * src_hs * bpp,
+-                   (size_t)src_hs * bpp);
+-        const uint8_t *su = sy + (size_t)src_hs * src_vs * bpp;
+-        uint8_t       *du = dy + (size_t)src_hs * src_vs * bpp;
+-        for (int r = 0; r < copy_h / 2; r++)
+-            memcpy(du + (size_t)r * src_hs * bpp,
+-                   su + (size_t)r * src_hs * bpp,
+-                   (size_t)src_hs * bpp);
+-        copied = 1;
+-    }
+-    mpp_frame_deinit(&frame);
+-
+-    pthread_mutex_lock(&s->lock);
+-    s->frame  = NULL;
+-    s->fmt    = ffmt;
+-    if (fwidth  > 0) s->width   = fwidth;
+-    if (fheight > 0) s->height  = fheight;
+-    if (fhs     > 0) s->hstride = fhs;
+-    if (fvs     > 0) s->vstride = fvs;
+-    s->decoded  = true;
+-    pthread_cond_signal(&s->cond);
+-    pthread_mutex_unlock(&s->lock);
+-    LOG("assign_mpp_frame: surface=0x%x prime_fd=%d MPP %dx%d stride=%dx%d fmt=0x%x copied=%d",
+-        (unsigned)sid, s->prime_fd, fwidth, fheight, fhs, fvs, (unsigned)ffmt, copied);
+-}
+-
+-/* Build Annex B bitstream from VA-API buffers and send to MPP */
+-static VAStatus do_h264_decode(RKContext *c, RKDriver *d)
+-{
+-    /* gather slice data */
+-    uint8_t *pkt_data = NULL;
+-    size_t   pkt_cap  = 0;
+-    size_t   pkt_sz   = 0;
+-
+-#define PKT_APPEND(ptr, len) do {                           \
+-    size_t _l = (len);                                      \
+-    if (pkt_sz + _l > pkt_cap) {                           \
+-        pkt_cap = (pkt_sz + _l) * 2 + 4096;               \
+-        pkt_data = realloc(pkt_data, pkt_cap);             \
+-        if (!pkt_data) return VA_STATUS_ERROR_ALLOCATION_FAILED; \
+-    }                                                       \
+-    memcpy(pkt_data + pkt_sz, (ptr), _l);                 \
+-    pkt_sz += _l;                                          \
+-} while (0)
+-
+-    /* check if first slice is IDR to prepend SPS+PPS */
+-    bool is_idr = false;
+-    for (int i = 0; i < c->n_pending; i++) {
+-        RKBuffer *b = buffer_by_id(d, c->pending[i]);
+-        if (!b || b->type != VASliceDataBufferType) continue;
+-        uint8_t nal_type = ((uint8_t *)b->data)[0] & 0x1F;
+-        is_idr = (nal_type == 5);
+-        break;
+-    }
+-
+-    /* SPS + PPS before every IDR (or first frame) */
+-    if (is_idr || !c->sps_sent) {
+-        uint8_t hdr[512];
+-        int n = h264_write_sps(hdr, sizeof(hdr), &c->last_pp,
+-                               profile_idc(config_by_id(d, c->config_id)->profile));
+-        if (n > 0) { PKT_APPEND(hdr, (size_t)n); }
+-
+-        n = h264_write_pps(hdr, sizeof(hdr), &c->last_pp);
+-        if (n > 0) { PKT_APPEND(hdr, (size_t)n); }
+-
+-        c->sps_sent = true;
+-    }
+-
+-    /* append each slice with Annex B start code */
+-    static const uint8_t sc[4] = {0x00, 0x00, 0x00, 0x01};
+-    for (int i = 0; i < c->n_pending; i++) {
+-        RKBuffer *b = buffer_by_id(d, c->pending[i]);
+-        if (!b || b->type != VASliceDataBufferType) continue;
+-        PKT_APPEND(sc, 4);
+-        PKT_APPEND(b->data, (size_t)b->size * b->num_elements);
+-    }
+-#undef PKT_APPEND
+-
+-    if (!pkt_sz) {
+-        LOG("do_h264_decode: no slice data, marking surface 0x%x decoded",
+-            (unsigned)c->render_target);
+-        free(pkt_data);
+-        RKSurface *tgt = surface_by_id(d, c->render_target);
+-        if (tgt) {
+-            pthread_mutex_lock(&tgt->lock);
+-            tgt->decoded = true;
+-            pthread_cond_signal(&tgt->cond);
+-            pthread_mutex_unlock(&tgt->lock);
+-        }
+-        return VA_STATUS_SUCCESS;
+-    }
+-
+-    /* Pre-drain: consume frames MPP already has ready from previous packets */
+-    {
+-        MppFrame f = NULL;
+-        while (c->mpi->decode_get_frame(c->mpp, &f) == MPP_OK && f) {
+-            assign_mpp_frame(f, c, d);
+-            f = NULL;
+-        }
+-    }
+-
+-    LOG("do_h264_decode: sending %zu bytes target=0x%x", pkt_sz, (unsigned)c->render_target);
+-    MppPacket pkt = NULL;
+-    mpp_packet_init(&pkt, pkt_data, pkt_sz);
+-    mpp_packet_set_length(pkt, pkt_sz);
+-    mpp_packet_set_pts(pkt, (RK_S64)c->render_target);
+-
+-    MPP_RET ret = c->mpi->decode_put_packet(c->mpp, pkt);
+-    mpp_packet_deinit(&pkt);
+-    free(pkt_data);
+-
+-    if (ret != MPP_OK) {
+-        LOG("decode_put_packet failed: %d", ret);
+-        return VA_STATUS_ERROR_DECODING_ERROR;
+-    }
+-
+-    for (int tries = 0; tries < 100; tries++) {
+-        RKSurface *tgt = surface_by_id(d, c->render_target);
+-        if (tgt) {
+-            pthread_mutex_lock(&tgt->lock);
+-            bool done = tgt->decoded;
+-            pthread_mutex_unlock(&tgt->lock);
+-            if (done) break;
+-        }
+-        MppFrame frame = NULL;
+-        if (c->mpi->decode_get_frame(c->mpp, &frame) == MPP_OK && frame)
+-            assign_mpp_frame(frame, c, d);
+-        else
+-            usleep(1000);
+-    }
+-
+-    return VA_STATUS_SUCCESS;
+-}
+-
+-/* Return false for VP9 altref / non-displayed frames (show_frame=0).
+- * These are decoded by MPP internally as references but never output via
+- * decode_get_frame — polling for them stalls the thread for the full timeout.
+- * VP9 uncompressed header layout (MSB-first):
+- *   [7:6] frame_marker=0b10  [5] profile_low  [4] profile_high
+- *   profile≠3: [3] show_existing  [2] frame_type  [1] show_frame
+- *   profile=3:  [3] reserved       [2] show_existing [1] frame_type [0] show_frame */
+-static bool vp9_show_frame(const uint8_t *data, size_t len)
+-{
+-    if (!data || len < 1) return true;
+-    uint8_t b = data[0];
+-    if ((b >> 6) != 2) return true;                   /* bad frame_marker, assume shown */
+-    int profile = ((b >> 5) & 1) | (((b >> 4) & 1) << 1);
+-    if (profile != 3) {
+-        if ((b >> 3) & 1) return true;                /* show_existing_frame */
+-        return (b >> 1) & 1;                          /* show_frame */
+-    } else {
+-        if ((b >> 2) & 1) return true;                /* show_existing_frame (profile 3) */
+-        return b & 1;                                 /* show_frame (profile 3) */
+-    }
+-}
+-
+-/* For VP9 / HEVC / AV1: slice data is already a complete coded picture */
+-static VAStatus do_generic_decode(RKContext *c, RKDriver *d)
+-{
+-    uint8_t *pkt_data = NULL;
+-    size_t   pkt_sz   = 0;
+-    size_t   pkt_cap  = 0;
+-
+-#define PKT_APPEND(ptr, len) do {                           \
+-    size_t _l = (len);                                      \
+-    if (pkt_sz + _l > pkt_cap) {                           \
+-        pkt_cap = (pkt_sz + _l) * 2 + 4096;               \
+-        pkt_data = realloc(pkt_data, pkt_cap);             \
+-        if (!pkt_data) return VA_STATUS_ERROR_ALLOCATION_FAILED; \
+-    }                                                       \
+-    memcpy(pkt_data + pkt_sz, (ptr), _l);                 \
+-    pkt_sz += _l;                                          \
+-} while (0)
+-
+-    for (int i = 0; i < c->n_pending; i++) {
+-        RKBuffer *b = buffer_by_id(d, c->pending[i]);
+-        if (!b || b->type != VASliceDataBufferType) continue;
+-        PKT_APPEND(b->data, (size_t)b->size * b->num_elements);
+-    }
+-#undef PKT_APPEND
+-
+-    if (!pkt_sz) {
+-        LOG("do_generic_decode: no slice data, marking surface 0x%x decoded",
+-            (unsigned)c->render_target);
+-        free(pkt_data);
+-        RKSurface *tgt = surface_by_id(d, c->render_target);
+-        if (tgt) {
+-            pthread_mutex_lock(&tgt->lock);
+-            tgt->decoded = true;
+-            pthread_cond_signal(&tgt->cond);
+-            pthread_mutex_unlock(&tgt->lock);
+-        }
+-        return VA_STATUS_SUCCESS;
+-    }
+-
+-    /* Detect VP9 altref (show_frame=0): MPP decodes them as references but does
+-     * NOT output them via decode_get_frame in this environment, so we never
+-     * poll/block for them — see the is_hidden handling after decode_put_packet. */
+-    bool is_hidden = (c->coding == MPP_VIDEO_CodingVP9) &&
+-                     !vp9_show_frame(pkt_data, pkt_sz);
+-
+-    /* Pre-drain: consume any frames MPP already has ready from previous
+-     * packets.  Keyframes that timed out in the previous EndPicture poll
+-     * window land here at the start of the next call. */
+-    {
+-        MppFrame f = NULL;
+-        while (c->mpi->decode_get_frame(c->mpp, &f) == MPP_OK && f) {
+-            assign_mpp_frame(f, c, d);
+-            f = NULL;
+-        }
+-    }
+-
+-    /* Enqueue this surface into the FIFO decode queue (PTS-routing fallback).
+-     * Altref frames are skipped: MPP never outputs them, so enqueuing would
+-     * leave a permanent entry the head can never advance past. */
+-    if (!is_hidden) {
+-        c->decode_queue[c->dq_tail] = c->render_target;
+-        c->dq_tail = (c->dq_tail + 1) & 63;
+-    }
+-
+-    LOG("do_generic_decode: sending %zu bytes to MPP (coding=%d) target=0x%x%s",
+-        pkt_sz, (int)c->coding, (unsigned)c->render_target,
+-        is_hidden ? " [altref]" : "");
+-    MppPacket pkt = NULL;
+-    mpp_packet_init(&pkt, pkt_data, pkt_sz);
+-    mpp_packet_set_length(pkt, pkt_sz);
+-    mpp_packet_set_pts(pkt, (RK_S64)c->render_target);
+-
+-    MPP_RET ret = c->mpi->decode_put_packet(c->mpp, pkt);
+-    mpp_packet_deinit(&pkt);
+-    free(pkt_data);
+-
+-    if (ret != MPP_OK) {
+-        LOG("decode_put_packet failed: %d", ret);
+-        if (!is_hidden) c->dq_tail = (c->dq_tail - 1) & 63; /* undo enqueue */
+-        return VA_STATUS_ERROR_DECODING_ERROR;
+-    }
+-
+-    /* Altref frames (show_frame=0): MPP decodes them internally as references
+-     * but never outputs them via decode_get_frame here, and ffmpeg never syncs
+-     * or displays a hidden frame directly.  So do NOT poll — that would block
+-     * the decode thread for the whole poll window per altref, accumulating
+-     * latency until Firefox's pipeline underruns (NS_ERROR_DOM_MEDIA_FATAL_ERR).
+-     * Just mark the surface decoded immediately; its permanent prime_fd stays
+-     * valid (placeholder content) so ExportSurfaceHandle always succeeds. */
+-    if (is_hidden) {
+-        RKSurface *tgt = surface_by_id(d, c->render_target);
+-        if (tgt) {
+-            pthread_mutex_lock(&tgt->lock);
+-            tgt->decoded = true;
+-            pthread_cond_signal(&tgt->cond);
+-            pthread_mutex_unlock(&tgt->lock);
+-        }
+-        return VA_STATUS_SUCCESS;
+-    }
+-
+-    /* Do NOT poll here — return immediately so Firefox's decode thread is never
+-     * stalled. 4K keyframes (835KB) can take >1.6s in MPP; blocking EndPicture
+-     * for that long freezes Firefox's media pipeline and triggers NS_ERROR at
+-     * DASH segment boundaries. SyncSurface already has a drain loop and is the
+-     * correct place to wait for the decoded frame. */
+-    return VA_STATUS_SUCCESS;
+-}
+-
+-static VAStatus rk_EndPicture(VADriverContextP ctx, VAContextID ctx_id) {
+-    LOG("EndPicture: ctx=0x%x", ctx_id);
+-    RKDriver  *d = drv_from_ctx(ctx);
+-    RKContext *c = context_by_id(d, ctx_id);
+-    if (!c) return VA_STATUS_ERROR_INVALID_CONTEXT;
+-
+-    VAStatus st;
+-    if (c->coding == MPP_VIDEO_CodingAVC)
+-        st = do_h264_decode(c, d);
+-    else
+-        st = do_generic_decode(c, d);
+-
+-    return st;
+-}
+-
+-static VAStatus rk_SyncSurface(VADriverContextP ctx, VASurfaceID id) {
+-    RKDriver  *d = drv_from_ctx(ctx);
+-    RKSurface *s = surface_by_id(d, id);
+-    if (!s) return VA_STATUS_ERROR_INVALID_SURFACE;
+-
+-    pthread_mutex_lock(&s->lock);
+-    bool ready  = s->decoded || (s->ctx_id == 0);  /* not started = placeholder valid */
+-    VAContextID cid = s->ctx_id;
+-    pthread_mutex_unlock(&s->lock);
+-
+-    if (ready) {
+-        LOG("SyncSurface: surface=0x%x prime_fd=%d ready", id, s->prime_fd);
+-        return VA_STATUS_SUCCESS;
+-    }
+-
+-    /* EndPicture already polled 500ms; if the surface still isn't decoded
+-     * (B-frame pipeline priming, slow keyframe), actively drain MPP here
+-     * instead of sleeping on a cond that will never be signalled. */
+-    RKContext *c = context_by_id(d, cid);
+-    struct timespec deadline;
+-    clock_gettime(CLOCK_REALTIME, &deadline);
+-    deadline.tv_sec += 3;
+-
+-    LOG("SyncSurface: surface=0x%x draining MPP ctx=0x%x", id, cid);
+-    for (;;) {
+-        pthread_mutex_lock(&s->lock);
+-        bool done = s->decoded;
+-        pthread_mutex_unlock(&s->lock);
+-        if (done) { LOG("SyncSurface: surface=0x%x OK prime_fd=%d", id, s->prime_fd); break; }
+-
+-        struct timespec now;
+-        clock_gettime(CLOCK_REALTIME, &now);
+-        if (now.tv_sec > deadline.tv_sec ||
+-            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
+-            LOG("SyncSurface: TIMEOUT surface=0x%x prime_fd=%d", id, s->prime_fd);
+-            break;
+-        }
+-
+-        if (c) {
+-            MppFrame frame = NULL;
+-            if (c->mpi->decode_get_frame(c->mpp, &frame) == MPP_OK && frame) {
+-                assign_mpp_frame(frame, c, d);
+-                continue; /* recheck immediately without sleeping */
+-            }
+-        }
+-        usleep(1000);
+-    }
+-    pthread_mutex_lock(&s->lock);
+-    bool final_ok = s->decoded;
+-    pthread_mutex_unlock(&s->lock);
+-    return final_ok ? VA_STATUS_SUCCESS : VA_STATUS_ERROR_DECODING_ERROR;
+-}
++static int lh_io(int fd,void*p,size_t n,int out){while(n){ssize_t r=out?send(fd,p,n,MSG_NOSIGNAL):recv(fd,p,n,0);if(r<0&&errno==EINTR)continue;if(r<=0)return -1;p=(char*)p+r;n-=r;}return 0;}
++static int rpc(int fd,uint32_t op,uint32_t a,uint32_t b,void*data,uint32_t size,uint8_t*out,size_t cap,const unsigned char *shared){
++ uint32_t h[4]={op,a,b,size},r[4];
++ if(lh_io(fd,h,16,1)||lh_io(fd,data,size,1)||lh_io(fd,r,16,0))return -1;
++ if(r[0]==2){uint32_t desc[4];if(op!=2||!shared||r[3]!=16||lh_io(fd,desc,16,0)||desc[1]||desc[0]%(16u*1024*1024)||desc[0]>48u*1024*1024||desc[2]>16u*1024*1024||desc[2]>cap||desc[3]!=a)return -1;
++  atomic_thread_fence(memory_order_acquire);
++  if(desc[2])memcpy(out,shared+desc[0],desc[2]);
++  return desc[2];
++ }
++ if(r[0]!=0||r[3]>cap)return -1;
++ if(r[3]&&lh_io(fd,out,r[3],0))return -1;return r[3];
++}
++
++static VAStatus do_h264_decode(RKContext*c,RKDriver*d){
++ RKSurface*t=surface_by_id(d,c->render_target);if(!t)return VA_STATUS_ERROR_INVALID_SURFACE;
++ if(c->last_pp.bit_depth_luma_minus8||c->last_pp.bit_depth_chroma_minus8||!c->last_pp.seq_fields.bits.frame_mbs_only_flag)return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
++ unsigned refs0=0,refs1=0;for(int i=0;i<c->n_pending;i++){RKBuffer*b=buffer_by_id(d,c->pending[i]);if(b&&b->type==VASliceParameterBufferType&&b->size>=sizeof(VASliceParameterBufferH264)){VASliceParameterBufferH264*sp=b->data;refs0=sp->num_ref_idx_l0_active_minus1;refs1=sp->num_ref_idx_l1_active_minus1;break;}}if(refs0>31||refs1>31)return VA_STATUS_ERROR_DECODING_ERROR;
++ uint8_t hdr[2048];int n=h264_write_sps(hdr,sizeof hdr,&c->last_pp,profile_idc(config_by_id(d,c->config_id)->profile));if(n<0)return VA_STATUS_ERROR_DECODING_ERROR;int m=h264_write_pps(hdr+n,sizeof hdr-n,&c->last_pp,refs0,refs1);if(m<0)return VA_STATUS_ERROR_DECODING_ERROR;n+=m;
++ if(c->fd<0){const char*path=lh_socket_path();if(!path)return VA_STATUS_ERROR_OPERATION_FAILED;struct sockaddr_un a={.sun_family=AF_UNIX};if(strlen(path)>=sizeof a.sun_path)return VA_STATUS_ERROR_OPERATION_FAILED;strcpy(a.sun_path,path);int(*take)(void)=dlsym(RTLD_DEFAULT,"lh_video_take_fd");if(take){c->fd=take();if(c->fd<0)goto fail;}else {c->fd=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);struct timeval tv={.tv_sec=5};setsockopt(c->fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);setsockopt(c->fd,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof tv);if(connect(c->fd,(void*)&a,sizeof a))goto fail;}if(rpc(c->fd,1,c->width,c->height,hdr,n,NULL,0,d->shared)<0)goto fail;}
++ size_t len=n;for(int i=0;i<c->n_pending;i++){RKBuffer*b=buffer_by_id(d,c->pending[i]);if(b&&b->type==VASliceDataBufferType)len+=4+(size_t)b->size*b->num_elements;}if(len>16*1024*1024)goto fail;
++ uint8_t*data=malloc(len);if(!data)goto fail;memcpy(data,hdr,n);size_t off=n;
++ for(int i=0;i<c->n_pending;i++){RKBuffer*b=buffer_by_id(d,c->pending[i]);if(!b||b->type!=VASliceDataBufferType)continue;size_t z=(size_t)b->size*b->num_elements;memcpy(data+off,"\0\0\0\1",4);off+=4;memcpy(data+off,b->data,z);off+=z;}
++ int got=rpc(c->fd,2,c->frame_index++,0,data,len,t->pixels,(size_t)t->width*t->height*3/2,d->shared);free(data);if(got!=(int)((size_t)t->width*t->height*3/2))goto fail;t->decoded=true;return 0;
++fail:fprintf(stderr,"LinuxHost decode transport failure errno=%d (%s)\n",errno,strerror(errno));if(c->fd>=0)close(c->fd);c->fd=-1;return VA_STATUS_ERROR_DECODING_ERROR;
++}
++
++/* Read just the keyframe color configuration; retain full-range sample values. */
++static unsigned vp9_bits(const unsigned char*p,unsigned*bit,unsigned n){unsigned v=0;while(n--){v=(v<<1)|((p[*bit/8]>>(7-*bit%8))&1);(*bit)++;}return v;}
++static int vp9_range(const unsigned char*p,size_t n){if(n<10)return -1;unsigned b=0;if(vp9_bits(p,&b,2)!=2)return -1;unsigned lo=vp9_bits(p,&b,1),profile=lo|(vp9_bits(p,&b,1)<<1);if(profile==3)vp9_bits(p,&b,1);if(vp9_bits(p,&b,1)||vp9_bits(p,&b,1))return -1;vp9_bits(p,&b,2);if(vp9_bits(p,&b,24)!=0x498342)return -1;if(profile>=2)vp9_bits(p,&b,1);unsigned cs=vp9_bits(p,&b,3);return cs==7?1:vp9_bits(p,&b,1);}
++static VAStatus do_vp9_decode(RKContext*c,RKDriver*d){
++ RKSurface*t=surface_by_id(d,c->render_target);if(!t)return VA_STATUS_ERROR_INVALID_SURFACE;
++ VADecPictureParameterBufferVP9*pp=NULL;RKBuffer*slice=NULL;
++ for(int i=0;i<c->n_pending;i++){RKBuffer*b=buffer_by_id(d,c->pending[i]);if(!b)continue;
++  if(b->type==VAPictureParameterBufferType&&b->size>=sizeof(*pp))pp=b->data;
++  if(b->type==VASliceDataBufferType){if(slice)return VA_STATUS_ERROR_UNIMPLEMENTED;slice=b;}}
++ if(!pp||!slice||!((pp->bit_depth==8&&pp->profile==0&&t->bytes==1)||(pp->bit_depth==10&&pp->profile==2&&t->bytes==2)))return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
++ if(pp->frame_width!=t->width||pp->frame_height!=t->height)return VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED;
++ int range=vp9_range(slice->data,(size_t)slice->size*slice->num_elements);
++ if(c->fd<0){if(range<0)return VA_STATUS_ERROR_DECODING_ERROR;const char*path=lh_socket_path();if(!path)return VA_STATUS_ERROR_OPERATION_FAILED;int(*take)(void)=dlsym(RTLD_DEFAULT,"lh_video_take_fd");if(take)c->fd=take();else {struct sockaddr_un a={.sun_family=AF_UNIX};if(strlen(path)>=sizeof a.sun_path)return VA_STATUS_ERROR_OPERATION_FAILED;strcpy(a.sun_path,path);c->fd=socket(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0);if(connect(c->fd,(void*)&a,sizeof a))goto fail;}
++  if(c->fd<0)goto fail;uint8_t config[]={1,0,0,0,pp->profile,0,pp->bit_depth<<4,2,2,2,0,0};config[6]|=range;struct timeval tv={.tv_sec=5};setsockopt(c->fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof tv);setsockopt(c->fd,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof tv);if(rpc(c->fd,d->shared?4:3,pp->frame_width,pp->frame_height,config,sizeof config,NULL,0,d->shared)<0)goto fail;}
++ size_t expected=(size_t)t->width*t->height*3/2*t->bytes;
++ int got=rpc(c->fd,2,c->frame_index++,0,slice->data,slice->size*slice->num_elements,t->pixels,expected,d->shared);
++ if(got<0||(got>0&&(size_t)got!=expected))goto fail;t->decoded=true;return 0;
++fail:if(c->fd>=0)close(c->fd);c->fd=-1;return VA_STATUS_ERROR_DECODING_ERROR;
++}
++
++static VAStatus rk_EndPicture(VADriverContextP ctx,VAContextID id){RKDriver*d=drv_from_ctx(ctx);RKContext*c=context_by_id(d,id);return c?(c->coding==3?do_vp9_decode(c,d):do_h264_decode(c,d)):VA_STATUS_ERROR_INVALID_CONTEXT;}
++
++static VAStatus rk_SyncSurface(VADriverContextP ctx,VASurfaceID id){RKSurface*t=surface_by_id(drv_from_ctx(ctx),id);if(!t)return VA_STATUS_ERROR_INVALID_SURFACE;return t->decoded||!t->ctx_id?0:VA_STATUS_ERROR_DECODING_ERROR;}
+ 
+ static VAStatus rk_SyncSurface2(VADriverContextP ctx,
+                                   VASurfaceID id, uint64_t timeout_ns) {
+@@ -1027,146 +490,7 @@
+     return VA_STATUS_SUCCESS;
+ }
+ 
+-static VAStatus rk_ExportSurfaceHandle(VADriverContextP ctx,
+-                                        VASurfaceID id,
+-                                        uint32_t mem_type,
+-                                        uint32_t flags,
+-                                        void *descriptor) {
+-    RKDriver  *d = drv_from_ctx(ctx);
+-    RKSurface *s = surface_by_id(d, id);
+-    LOG("ExportSurfaceHandle: surface=0x%x mem_type=0x%x flags=0x%x",
+-        id, mem_type, flags);
+-    if (!s) return VA_STATUS_ERROR_INVALID_SURFACE;
+-    (void)flags;
+-
+-    if (mem_type != VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2) {
+-        LOG("ExportSurfaceHandle: unsupported mem_type 0x%x", mem_type);
+-        return VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;
+-    }
+-
+-    /* If decode is in progress, sync now so the exported DMA-BUF contains the
+-     * correct frame. Firefox calls ExportSurfaceHandle before SyncSurface when
+-     * EndPicture is async; without this the EGLImage gets stale data. */
+-    pthread_mutex_lock(&s->lock);
+-    bool needs_sync = !s->decoded && (s->ctx_id != 0);
+-    pthread_mutex_unlock(&s->lock);
+-    if (needs_sync)
+-        rk_SyncSurface(ctx, id);
+-
+-    pthread_mutex_lock(&s->lock);
+-    int fd       = s->prime_fd;
+-    int hs       = s->hstride ? s->hstride : s->width;
+-    int vs       = s->vstride ? s->vstride : s->height;
+-    bool decoded = s->decoded;
+-    bool is_placeholder = (s->priv_buf != NULL);
+-    bool is_10bit = MPP_FRAME_FMT_IS_YUV_10BIT(s->fmt);
+-    pthread_mutex_unlock(&s->lock);
+-
+-    if (fd < 0) {
+-        LOG("ExportSurfaceHandle: prime_fd not ready (fd<0 decoded=%d), ERROR_INVALID_SURFACE", decoded);
+-        return VA_STATUS_ERROR_INVALID_SURFACE;
+-    }
+-
+-    int export_fd = dup(fd);
+-    if (export_fd < 0) {
+-        LOG("ExportSurfaceHandle: dup(%d) failed errno=%d, ERROR_ALLOCATION_FAILED", fd, errno);
+-        return VA_STATUS_ERROR_ALLOCATION_FAILED;
+-    }
+-
+-    LOG("ExportSurfaceHandle: surface=0x%x %dx%d stride=%dx%d export_fd=%d decoded=%d placeholder=%d 10bit=%d",
+-        id, s->width, s->height, hs, vs, export_fd, decoded, is_placeholder, is_10bit);
+-
+-    VADRMPRIMESurfaceDescriptor *desc = descriptor;
+-    memset(desc, 0, sizeof(*desc));
+-    desc->width       = (uint32_t)s->width;
+-    desc->height      = (uint32_t)s->height;
+-    desc->num_objects = 1;
+-    desc->objects[0].fd                  = export_fd;
+-    desc->objects[0].drm_format_modifier = 0; /* DRM_FORMAT_MOD_LINEAR */
+-
+-    bool composed = (flags & VA_EXPORT_SURFACE_COMPOSED_LAYERS) != 0;
+-
+-    /* COMPOSED_LAYERS: single NV12/P010 layer with 2 planes (mpv, GStreamer).
+-     * SEPARATE_LAYERS (default): R8/GR88 split planes (Firefox DMABufSurfaceYUV). */
+-    if (!is_10bit && composed) {
+-        desc->fourcc     = VA_FOURCC_NV12;
+-        desc->num_layers = 1;
+-        desc->objects[0].size           = (uint32_t)(hs * vs * 3 / 2);
+-        desc->layers[0].drm_format      = 0x3231564e; /* DRM_FORMAT_NV12 */
+-        desc->layers[0].num_planes      = 2;
+-        desc->layers[0].object_index[0] = 0;
+-        desc->layers[0].offset[0]       = 0;
+-        desc->layers[0].pitch[0]        = (uint32_t)hs;
+-        desc->layers[0].object_index[1] = 0;
+-        desc->layers[0].offset[1]       = (uint32_t)(hs * vs);
+-        desc->layers[0].pitch[1]        = (uint32_t)hs;
+-        return VA_STATUS_SUCCESS;
+-    }
+-    if (is_10bit && composed) {
+-        desc->fourcc     = VA_FOURCC_P010;
+-        desc->num_layers = 1;
+-        desc->objects[0].size           = (uint32_t)(hs * vs * 3);
+-        desc->layers[0].drm_format      = 0x30313050; /* DRM_FORMAT_P010 */
+-        desc->layers[0].num_planes      = 2;
+-        desc->layers[0].object_index[0] = 0;
+-        desc->layers[0].offset[0]       = 0;
+-        desc->layers[0].pitch[0]        = (uint32_t)(hs * 2);
+-        desc->layers[0].object_index[1] = 0;
+-        desc->layers[0].offset[1]       = (uint32_t)(hs * vs * 2);
+-        desc->layers[0].pitch[1]        = (uint32_t)(hs * 2);
+-        return VA_STATUS_SUCCESS;
+-    }
+-
+-    desc->num_layers = 2;
+-
+-    if (is_10bit) {
+-        /*
+-         * P010: 10-bit NV12 semi-planar.  Each luma/chroma sample is uint16.
+-         * Two-layer layout matching Firefox DMABufSurfaceYUV P010 import:
+-         *   layer 0 → DRM_FORMAT_R16    (Y,  16-bit luma, 10 significant bits)
+-         *   layer 1 → DRM_FORMAT_GR1616 (UV, 2×16-bit interleaved chroma)
+-         * Both layers share pitch = hs*2 (bytes per luma row).
+-         * UV offset = hs*vs*2 (Y plane size in bytes).
+-         */
+-        desc->fourcc                         = VA_FOURCC_P010;
+-        desc->objects[0].size                = (uint32_t)(hs * vs * 3);
+-        /* Y plane */
+-        desc->layers[0].drm_format           = 0x20363152; /* DRM_FORMAT_R16    */
+-        desc->layers[0].num_planes           = 1;
+-        desc->layers[0].object_index[0]      = 0;
+-        desc->layers[0].offset[0]            = 0;
+-        desc->layers[0].pitch[0]             = (uint32_t)(hs * 2);
+-        /* UV plane */
+-        desc->layers[1].drm_format           = 0x36315247; /* DRM_FORMAT_GR1616 */
+-        desc->layers[1].num_planes           = 1;
+-        desc->layers[1].object_index[0]      = 0;
+-        desc->layers[1].offset[0]            = (uint32_t)(hs * vs * 2);
+-        desc->layers[1].pitch[0]             = (uint32_t)(hs * 2);
+-    } else {
+-        /*
+-         * NV12: 8-bit YUV 4:2:0 semi-planar.
+-         * Firefox (DMABufSurfaceYUV) expects num_layers == plane count, each
+-         * layer being a single-plane view of the buffer:
+-         *   layer 0 → DRM_FORMAT_R8   (Y,  8-bit luma)
+-         *   layer 1 → DRM_FORMAT_GR88 (UV, interleaved chroma, 2 bytes/px)
+-         */
+-        desc->fourcc                         = VA_FOURCC_NV12;
+-        desc->objects[0].size                = (uint32_t)(hs * vs * 3 / 2);
+-        /* Y plane */
+-        desc->layers[0].drm_format           = 0x20203852; /* DRM_FORMAT_R8   */
+-        desc->layers[0].num_planes           = 1;
+-        desc->layers[0].object_index[0]      = 0;
+-        desc->layers[0].offset[0]            = 0;
+-        desc->layers[0].pitch[0]             = (uint32_t)hs;
+-        /* UV plane */
+-        desc->layers[1].drm_format           = 0x38385247; /* DRM_FORMAT_GR88 */
+-        desc->layers[1].num_planes           = 1;
+-        desc->layers[1].object_index[0]      = 0;
+-        desc->layers[1].offset[0]            = (uint32_t)(hs * vs);
+-        desc->layers[1].pitch[0]             = (uint32_t)hs;
+-    }
+-    return VA_STATUS_SUCCESS;
+-}
++static VAStatus rk_ExportSurfaceHandle(VADriverContextP ctx,VASurfaceID id,uint32_t mem,uint32_t flags,void*out){RKDriver*d=drv_from_ctx(ctx);RKSurface*t=surface_by_id(d,id);if(!t)return VA_STATUS_ERROR_INVALID_SURFACE;if(mem!=VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2||(flags&VA_EXPORT_SURFACE_COMPOSED_LAYERS))return VA_STATUS_ERROR_UNSUPPORTED_MEMORY_TYPE;if(!d->graphics){struct drm_state*drm=ctx->drm_state;if(!drm)return VA_STATUS_ERROR_OPERATION_FAILED;d->graphics=lh_graphics_new(drm->fd);}return lh_frame_export(d->graphics,&t->gpu,t->width,t->height,t->bytes,t->pixels,out)?VA_STATUS_ERROR_OPERATION_FAILED:0;}
+ 
+ static VAStatus rk_QueryImageFormats(VADriverContextP ctx,
+                                       VAImageFormat *list, int *n) {
+@@ -1189,7 +513,8 @@
+     (void)format;
+ 
+     VABufferID buf_id;
+-    unsigned int stride = (unsigned int)((width + 15) & ~15);
++    if(width<2||height<2||width>4096||height>4096||(format->fourcc!=VA_FOURCC_NV12&&format->fourcc!=VA_FOURCC_P010))return VA_STATUS_ERROR_INVALID_PARAMETER;
++    unsigned int stride = (unsigned int)((width + 15) & ~15)*(format->fourcc==VA_FOURCC_P010?2:1);
+     unsigned int size   = stride * (unsigned int)height * 3 / 2;
+     VAStatus st = rk_CreateBuffer(ctx, 0, VAImageBufferType, size, 1,
+                                   NULL, &buf_id);
+@@ -1242,35 +567,7 @@
+                                     unsigned char *palette)
+ { return VA_STATUS_SUCCESS; }
+ 
+-static VAStatus rk_GetImage(VADriverContextP ctx, VASurfaceID surface_id,
+-                             int x, int y, unsigned int w,
+-                             unsigned int h, VAImageID image_id)
+-{
+-    (void)x; (void)y; (void)w; (void)h;
+-    RKDriver  *d  = drv_from_ctx(ctx);
+-    RKSurface *s  = surface_by_id(d, surface_id);
+-    RKBuffer  *ib = buffer_by_id(d, (VABufferID)image_id);
+-    if (!s || !ib || !s->priv_buf || !ib->data) return VA_STATUS_ERROR_INVALID_SURFACE;
+-
+-    int hs  = s->hstride ? s->hstride : s->width;
+-    int vs  = s->vstride ? s->vstride : s->height;
+-    bool i10 = MPP_FRAME_FMT_IS_YUV_10BIT(s->fmt);
+-    int bpp  = i10 ? 2 : 1;
+-    /* image stride matches rk_CreateImage: (width+15)&~15 */
+-    int img_hs = (int)(((unsigned int)s->width + 15u) & ~15u) * bpp;
+-
+-    const uint8_t *sp = (const uint8_t *)mpp_buffer_get_ptr(s->priv_buf);
+-    uint8_t       *dp = (uint8_t *)ib->data;
+-    /* Y plane */
+-    for (int r = 0; r < s->height; r++)
+-        memcpy(dp + r * img_hs, sp + r * hs * bpp, (size_t)img_hs);
+-    /* UV plane: src at hs*vs, dst at img_hs*height */
+-    const uint8_t *su = sp + (size_t)hs * vs * bpp;
+-    uint8_t       *du = dp + (size_t)img_hs * s->height;
+-    for (int r = 0; r < s->height / 2; r++)
+-        memcpy(du + r * img_hs, su + r * hs * bpp, (size_t)img_hs);
+-    return VA_STATUS_SUCCESS;
+-}
++static VAStatus rk_GetImage(VADriverContextP ctx,VASurfaceID id,int x,int y,unsigned w,unsigned h,VAImageID im){RKDriver*d=drv_from_ctx(ctx);RKSurface*t=surface_by_id(d,id);RKBuffer*b=buffer_by_id(d,im);if(!t||!b||!t->decoded||x||y||w!=(unsigned)t->width||h!=(unsigned)t->height)return VA_STATUS_ERROR_INVALID_PARAMETER;unsigned stride=((w+15)&~15u)*t->bytes;w*=t->bytes;if(b->size<(size_t)stride*h*3/2)return VA_STATUS_ERROR_INVALID_BUFFER;for(unsigned r=0;r<h;r++)memcpy((char*)b->data+r*stride,t->pixels+r*w,w);for(unsigned r=0;r<h/2;r++)memcpy((char*)b->data+stride*(h+r),t->pixels+w*(h+r),w);return 0;}
+ 
+ static VAStatus rk_PutImage(VADriverContextP ctx, VASurfaceID surface,
+                              VAImageID image, int src_x, int src_y,
+@@ -1364,54 +661,7 @@
+ static VAStatus rk_UnlockSurface(VADriverContextP ctx, VASurfaceID surface)
+ { return VA_STATUS_SUCCESS; }
+ 
+-static VAStatus rk_QuerySurfaceAttrs(VADriverContextP ctx, VAConfigID config,
+-                                      VASurfaceAttrib *attrib_list,
+-                                      unsigned int *num_attribs)
+-{
+-    LOG("QuerySurfaceAttributes: config=0x%x list=%s",
+-        config, attrib_list ? "provided" : "NULL (query count)");
+-
+-    /* Firefox calls this twice: first with NULL to get count, then with buffer */
+-    const unsigned int n = 4;
+-    if (!attrib_list) {
+-        *num_attribs = n;
+-        return VA_STATUS_SUCCESS;
+-    }
+-    if (*num_attribs < n) {
+-        *num_attribs = n;
+-        return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;
+-    }
+-
+-    /* Pixel format: NV12 (8-bit) */
+-    attrib_list[0].type              = VASurfaceAttribPixelFormat;
+-    attrib_list[0].flags             = VA_SURFACE_ATTRIB_GETTABLE;
+-    attrib_list[0].value.type        = VAGenericValueTypeInteger;
+-    attrib_list[0].value.value.i     = VA_FOURCC_NV12;
+-
+-    /* Pixel format: P010 (10-bit) */
+-    attrib_list[1].type              = VASurfaceAttribPixelFormat;
+-    attrib_list[1].flags             = VA_SURFACE_ATTRIB_GETTABLE;
+-    attrib_list[1].value.type        = VAGenericValueTypeInteger;
+-    attrib_list[1].value.value.i     = VA_FOURCC_P010;
+-
+-    /* Memory type: VA-managed + DRM PRIME 2 */
+-    attrib_list[2].type              = VASurfaceAttribMemoryType;
+-    attrib_list[2].flags             = VA_SURFACE_ATTRIB_GETTABLE |
+-                                       VA_SURFACE_ATTRIB_SETTABLE;
+-    attrib_list[2].value.type        = VAGenericValueTypeInteger;
+-    attrib_list[2].value.value.i     = (int)(VA_SURFACE_ATTRIB_MEM_TYPE_VA |
+-                                       VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2);
+-
+-    /* Max resolution */
+-    attrib_list[3].type              = VASurfaceAttribMaxWidth;
+-    attrib_list[3].flags             = VA_SURFACE_ATTRIB_GETTABLE;
+-    attrib_list[3].value.type        = VAGenericValueTypeInteger;
+-    attrib_list[3].value.value.i     = 7680;
+-
+-    *num_attribs = n;
+-    LOG("QuerySurfaceAttributes: returned %u attribs (NV12, P010, DRM_PRIME_2)", n);
+-    return VA_STATUS_SUCCESS;
+-}
++static VAStatus rk_QuerySurfaceAttrs(VADriverContextP ctx,VAConfigID id,VASurfaceAttrib*l,unsigned*n){if(!l){*n=4;return 0;}if(*n<4){*n=4;return VA_STATUS_ERROR_MAX_NUM_EXCEEDED;}memset(l,0,4*sizeof*l);for(int i=0;i<4;i++){l[i].flags=VA_SURFACE_ATTRIB_GETTABLE;l[i].value.type=VAGenericValueTypeInteger;}l[0].type=VASurfaceAttribPixelFormat;l[0].value.value.i=config_by_id(drv_from_ctx(ctx),id)->profile==VAProfileVP9Profile2?VA_FOURCC_P010:VA_FOURCC_NV12;l[1].type=VASurfaceAttribMemoryType;l[1].value.value.i=VA_SURFACE_ATTRIB_MEM_TYPE_VA;l[2].type=VASurfaceAttribMaxWidth;l[2].value.value.i=profile_to_coding(config_by_id(drv_from_ctx(ctx),id)->profile)==3?((config_by_id(drv_from_ctx(ctx),id)->profile==VAProfileVP9Profile0&&lh_allow_4k())?3840:1920):4096;l[3].type=VASurfaceAttribMaxHeight;l[3].value.value.i=profile_to_coding(config_by_id(drv_from_ctx(ctx),id)->profile)==3?((config_by_id(drv_from_ctx(ctx),id)->profile==VAProfileVP9Profile0&&lh_allow_4k())?2160:1088):4096;*n=4;return 0;}
+ 
+ static VAStatus rk_AcquireBufferHandle(VADriverContextP ctx,
+                                         VABufferID buf_id, VABufferInfo *buf_info)
+@@ -1493,6 +743,170 @@
+ 
+ /* ── driver init ─────────────────────────────────────────────── */
+ 
++static pthread_mutex_t api_lock=PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
++static VAStatus locked_rk_AcquireBufferHandle(VADriverContextP ctx,
++                                        VABufferID buf_id, VABufferInfo *buf_info){pthread_mutex_lock(&api_lock);VAStatus r=rk_AcquireBufferHandle(ctx,buf_id,buf_info);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_AssociateSubpic(VADriverContextP ctx,
++                                    VASubpictureID subpicture,
++                                    VASurfaceID *target_surfaces, int num_surfaces,
++                                    short src_x, short src_y,
++                                    unsigned short src_width, unsigned short src_height,
++                                    short dest_x, short dest_y,
++                                    unsigned short dest_width, unsigned short dest_height,
++                                    unsigned int flags){pthread_mutex_lock(&api_lock);VAStatus r=rk_AssociateSubpic(ctx,subpicture,target_surfaces,num_surfaces,src_x,src_y,src_width,src_height,dest_x,dest_y,dest_width,dest_height,flags);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_BeginPicture(VADriverContextP ctx,
++                                 VAContextID ctx_id,
++                                 VASurfaceID render_target){pthread_mutex_lock(&api_lock);VAStatus r=rk_BeginPicture(ctx,ctx_id,render_target);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_BufferInfo(VADriverContextP ctx, VABufferID buf_id,
++                               VABufferType *type, unsigned int *size,
++                               unsigned int *num_elements){pthread_mutex_lock(&api_lock);VAStatus r=rk_BufferInfo(ctx,buf_id,type,size,num_elements);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_BufferSetNumElements(VADriverContextP ctx,
++                                         VABufferID id, unsigned int n){pthread_mutex_lock(&api_lock);VAStatus r=rk_BufferSetNumElements(ctx,id,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_Copy(VADriverContextP ctx, VACopyObject *dst,
++                         VACopyObject *src, VACopyOption option){pthread_mutex_lock(&api_lock);VAStatus r=rk_Copy(ctx,dst,src,option);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateBuffer(VADriverContextP ctx,
++                                 VAContextID context,
++                                 VABufferType type,
++                                 unsigned int size,
++                                 unsigned int num_elements,
++                                 void *data,
++                                 VABufferID *out_id){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateBuffer(ctx,context,type,size,num_elements,data,out_id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateBuffer2(VADriverContextP ctx, VAContextID context,
++                                  VABufferType type,
++                                  unsigned int w, unsigned int h,
++                                  unsigned int *unit_size,
++                                  unsigned int *pitch,
++                                  VABufferID *id){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateBuffer2(ctx,context,type,w,h,unit_size,pitch,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateConfig(VADriverContextP ctx,
++                                 VAProfile profile, VAEntrypoint entrypoint,
++                                 VAConfigAttrib *attribs, int n_attribs,
++                                 VAConfigID *out_id){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateConfig(ctx,profile,entrypoint,attribs,n_attribs,out_id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateContext(VADriverContextP ctx,VAConfigID id,int w,int h,int flag,VASurfaceID*targets,int nt,VAContextID*out){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateContext(ctx,id,w,h,flag,targets,nt,out);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateImage(VADriverContextP ctx,
++                                VAImageFormat *format,
++                                int width, int height,
++                                VAImage *image){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateImage(ctx,format,width,height,image);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateMFContext(VADriverContextP ctx,
++                                    VAMFContextID *mfe_context){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateMFContext(ctx,mfe_context);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateSubpicture(VADriverContextP ctx,
++                                     VAImageID image,
++                                     VASubpictureID *subpicture){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateSubpicture(ctx,image,subpicture);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateSurfaces(VADriverContextP ctx,int w,int h,int format,int n,VASurfaceID*ids){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateSurfaces(ctx,w,h,format,n,ids);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_CreateSurfaces2(VADriverContextP ctx,
++                                    unsigned int format,
++                                    unsigned int width, unsigned int height,
++                                    VASurfaceID *ids, unsigned int n,
++                                    VASurfaceAttrib *attribs,
++                                    unsigned int n_attribs){pthread_mutex_lock(&api_lock);VAStatus r=rk_CreateSurfaces2(ctx,format,width,height,ids,n,attribs,n_attribs);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DeassociateSubpic(VADriverContextP ctx,
++                                      VASubpictureID subpicture,
++                                      VASurfaceID *target_surfaces, int num_surfaces){pthread_mutex_lock(&api_lock);VAStatus r=rk_DeassociateSubpic(ctx,subpicture,target_surfaces,num_surfaces);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DeriveImage(VADriverContextP ctx,
++                                VASurfaceID sid, VAImage *image){pthread_mutex_lock(&api_lock);VAStatus r=rk_DeriveImage(ctx,sid,image);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DestroyBuffer(VADriverContextP ctx, VABufferID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_DestroyBuffer(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DestroyConfig(VADriverContextP ctx, VAConfigID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_DestroyConfig(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DestroyContext(VADriverContextP ctx,VAContextID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_DestroyContext(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DestroyImage(VADriverContextP ctx, VAImageID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_DestroyImage(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DestroySubpicture(VADriverContextP ctx,
++                                      VASubpictureID subpicture){pthread_mutex_lock(&api_lock);VAStatus r=rk_DestroySubpicture(ctx,subpicture);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_DestroySurfaces(VADriverContextP ctx,VASurfaceID*ids,int n){pthread_mutex_lock(&api_lock);VAStatus r=rk_DestroySurfaces(ctx,ids,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_EndPicture(VADriverContextP ctx,VAContextID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_EndPicture(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_ExportSurfaceHandle(VADriverContextP ctx,VASurfaceID id,uint32_t mem,uint32_t flags,void*out){pthread_mutex_lock(&api_lock);VAStatus r=rk_ExportSurfaceHandle(ctx,id,mem,flags,out);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_GetConfigAttributes(VADriverContextP ctx,
++                                       VAProfile profile,
++                                       VAEntrypoint entrypoint,
++                                       VAConfigAttrib *list, int n){pthread_mutex_lock(&api_lock);VAStatus r=rk_GetConfigAttributes(ctx,profile,entrypoint,list,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_GetDisplayAttrs(VADriverContextP ctx,
++                                    VADisplayAttribute *attr_list, int num_attributes){pthread_mutex_lock(&api_lock);VAStatus r=rk_GetDisplayAttrs(ctx,attr_list,num_attributes);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_GetImage(VADriverContextP ctx,VASurfaceID id,int x,int y,unsigned w,unsigned h,VAImageID im){pthread_mutex_lock(&api_lock);VAStatus r=rk_GetImage(ctx,id,x,y,w,h,im);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_GetSurfaceAttributes(VADriverContextP ctx,
++                                         VAConfigID config,
++                                         VASurfaceAttrib *list,
++                                         unsigned int n){pthread_mutex_lock(&api_lock);VAStatus r=rk_GetSurfaceAttributes(ctx,config,list,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_LockSurface(VADriverContextP ctx, VASurfaceID surface,
++                                unsigned int *fourcc,
++                                unsigned int *luma_stride,
++                                unsigned int *chroma_u_stride,
++                                unsigned int *chroma_v_stride,
++                                unsigned int *luma_offset,
++                                unsigned int *chroma_u_offset,
++                                unsigned int *chroma_v_offset,
++                                unsigned int *buffer_name, void **buffer){pthread_mutex_lock(&api_lock);VAStatus r=rk_LockSurface(ctx,surface,fourcc,luma_stride,chroma_u_stride,chroma_v_stride,luma_offset,chroma_u_offset,chroma_v_offset,buffer_name,buffer);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_MFAddContext(VADriverContextP ctx,
++                                 VAMFContextID mf_context, VAContextID context){pthread_mutex_lock(&api_lock);VAStatus r=rk_MFAddContext(ctx,mf_context,context);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_MFReleaseContext(VADriverContextP ctx,
++                                     VAMFContextID mf_context, VAContextID context){pthread_mutex_lock(&api_lock);VAStatus r=rk_MFReleaseContext(ctx,mf_context,context);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_MFSubmit(VADriverContextP ctx, VAMFContextID mf_context,
++                             VAContextID *contexts, int num_contexts){pthread_mutex_lock(&api_lock);VAStatus r=rk_MFSubmit(ctx,mf_context,contexts,num_contexts);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_MapBuffer(VADriverContextP ctx,
++                              VABufferID id, void **ptr){pthread_mutex_lock(&api_lock);VAStatus r=rk_MapBuffer(ctx,id,ptr);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_PutImage(VADriverContextP ctx, VASurfaceID surface,
++                             VAImageID image, int src_x, int src_y,
++                             unsigned int src_width, unsigned int src_height,
++                             int dest_x, int dest_y,
++                             unsigned int dest_width, unsigned int dest_height){pthread_mutex_lock(&api_lock);VAStatus r=rk_PutImage(ctx,surface,image,src_x,src_y,src_width,src_height,dest_x,dest_y,dest_width,dest_height);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_PutSurface(VADriverContextP ctx, VASurfaceID s,
++                               void *draw, short sx, short sy,
++                               unsigned short sw, unsigned short sh,
++                               short dx, short dy,
++                               unsigned short dw, unsigned short dh,
++                               VARectangle *clips, unsigned int nc,
++                               unsigned int flags){pthread_mutex_lock(&api_lock);VAStatus r=rk_PutSurface(ctx,s,draw,sx,sy,sw,sh,dx,dy,dw,dh,clips,nc,flags);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QueryConfigAttributes(VADriverContextP ctx,
++                                          VAConfigID id,
++                                          VAProfile *profile,
++                                          VAEntrypoint *entrypoint,
++                                          VAConfigAttrib *attribs, int *n){pthread_mutex_lock(&api_lock);VAStatus r=rk_QueryConfigAttributes(ctx,id,profile,entrypoint,attribs,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QueryConfigEntrypoints(VADriverContextP ctx,
++                                          VAProfile profile,
++                                          VAEntrypoint *list, int *n){pthread_mutex_lock(&api_lock);VAStatus r=rk_QueryConfigEntrypoints(ctx,profile,list,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QueryConfigProfiles(VADriverContextP ctx, VAProfile *l,int*n){pthread_mutex_lock(&api_lock);VAStatus r=rk_QueryConfigProfiles(ctx,l,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QueryDisplayAttrs(VADriverContextP ctx,
++                                      VADisplayAttribute *attr_list,
++                                      int *num_attributes){pthread_mutex_lock(&api_lock);VAStatus r=rk_QueryDisplayAttrs(ctx,attr_list,num_attributes);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QueryImageFormats(VADriverContextP ctx,
++                                      VAImageFormat *list, int *n){pthread_mutex_lock(&api_lock);VAStatus r=rk_QueryImageFormats(ctx,list,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QueryProcessingRate(VADriverContextP ctx,
++                                        VAConfigID config_id,
++                                        VAProcessingRateParameter *proc_buf,
++                                        unsigned int *processing_rate){pthread_mutex_lock(&api_lock);VAStatus r=rk_QueryProcessingRate(ctx,config_id,proc_buf,processing_rate);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QuerySubpicFmts(VADriverContextP ctx,
++                                    VAImageFormat *format_list,
++                                    unsigned int *flags,
++                                    unsigned int *num_formats){pthread_mutex_lock(&api_lock);VAStatus r=rk_QuerySubpicFmts(ctx,format_list,flags,num_formats);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QuerySurfaceAttrs(VADriverContextP ctx, VAConfigID config,
++                                      VASurfaceAttrib *attrib_list,
++                                      unsigned int *num_attribs){pthread_mutex_lock(&api_lock);VAStatus r=rk_QuerySurfaceAttrs(ctx,config,attrib_list,num_attribs);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QuerySurfaceError(VADriverContextP ctx, VASurfaceID s,
++                                      VAStatus err, void **info){pthread_mutex_lock(&api_lock);VAStatus r=rk_QuerySurfaceError(ctx,s,err,info);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_QuerySurfaceStatus(VADriverContextP ctx,
++                                       VASurfaceID id,
++                                       VASurfaceStatus *status){pthread_mutex_lock(&api_lock);VAStatus r=rk_QuerySurfaceStatus(ctx,id,status);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_ReleaseBufferHandle(VADriverContextP ctx, VABufferID buf_id){pthread_mutex_lock(&api_lock);VAStatus r=rk_ReleaseBufferHandle(ctx,buf_id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_RenderPicture(VADriverContextP ctx,
++                                  VAContextID ctx_id,
++                                  VABufferID *buffers, int n){pthread_mutex_lock(&api_lock);VAStatus r=rk_RenderPicture(ctx,ctx_id,buffers,n);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SetDisplayAttrs(VADriverContextP ctx,
++                                    VADisplayAttribute *attr_list, int num_attributes){pthread_mutex_lock(&api_lock);VAStatus r=rk_SetDisplayAttrs(ctx,attr_list,num_attributes);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SetImagePalette(VADriverContextP ctx, VAImageID image,
++                                    unsigned char *palette){pthread_mutex_lock(&api_lock);VAStatus r=rk_SetImagePalette(ctx,image,palette);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SetSubpicAlpha(VADriverContextP ctx,
++                                   VASubpictureID subpicture, float global_alpha){pthread_mutex_lock(&api_lock);VAStatus r=rk_SetSubpicAlpha(ctx,subpicture,global_alpha);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SetSubpicChromakey(VADriverContextP ctx,
++                                       VASubpictureID subpicture,
++                                       unsigned int chromakey_min,
++                                       unsigned int chromakey_max,
++                                       unsigned int chromakey_mask){pthread_mutex_lock(&api_lock);VAStatus r=rk_SetSubpicChromakey(ctx,subpicture,chromakey_min,chromakey_max,chromakey_mask);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SetSubpicImage(VADriverContextP ctx,
++                                   VASubpictureID subpicture, VAImageID image){pthread_mutex_lock(&api_lock);VAStatus r=rk_SetSubpicImage(ctx,subpicture,image);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SyncBuffer(VADriverContextP ctx, VABufferID buf_id,
++                               uint64_t timeout_ns){pthread_mutex_lock(&api_lock);VAStatus r=rk_SyncBuffer(ctx,buf_id,timeout_ns);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SyncSurface(VADriverContextP ctx,VASurfaceID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_SyncSurface(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_SyncSurface2(VADriverContextP ctx,
++                                  VASurfaceID id, uint64_t timeout_ns){pthread_mutex_lock(&api_lock);VAStatus r=rk_SyncSurface2(ctx,id,timeout_ns);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_Terminate(VADriverContextP ctx){pthread_mutex_lock(&api_lock);VAStatus r=rk_Terminate(ctx);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_UnlockSurface(VADriverContextP ctx, VASurfaceID surface){pthread_mutex_lock(&api_lock);VAStatus r=rk_UnlockSurface(ctx,surface);pthread_mutex_unlock(&api_lock);return r;}
++static VAStatus locked_rk_UnmapBuffer(VADriverContextP ctx, VABufferID id){pthread_mutex_lock(&api_lock);VAStatus r=rk_UnmapBuffer(ctx,id);pthread_mutex_unlock(&api_lock);return r;}
+ VAStatus __vaDriverInit_1_20(VADriverContextP ctx)  /* NOLINT */
+ {
+     log_init();
+@@ -1500,6 +914,10 @@
+     RKDriver *d = calloc(1, sizeof(*d));
+     if (!d) return VA_STATUS_ERROR_ALLOCATION_FAILED;
+     ctx->pDriverData = d;
++    const void *(*get_shared)(void)=dlsym(RTLD_DEFAULT,"lh_video_shared_memory");
++    if(get_shared)d->shared=get_shared();
++    if(!d->shared){int mem=open("/run/linuxhost-video/resource",O_RDONLY|O_CLOEXEC);if(mem>=0){void *p=mmap(NULL,64u*1024*1024,PROT_READ,MAP_SHARED,mem,0);close(mem);if(p!=MAP_FAILED){d->shared=p;d->own_shared=true;}}}
++
+ 
+     ctx->version_major        = VA_MAJOR_VERSION;
+     ctx->version_minor        = VA_MINOR_VERSION;
+@@ -1509,69 +927,69 @@
+     ctx->max_image_formats    = 4;
+     ctx->max_subpic_formats   = 4;
+     ctx->max_display_attributes = 4;
+-    ctx->str_vendor           = "Rockchip MPP VA-API Driver 0.1";
++    ctx->str_vendor           = "LinuxHost experimental remote VideoToolbox H264/VP9 decoder";
+ 
+     struct VADriverVTable *v = ctx->vtable;
+-    v->vaTerminate                = rk_Terminate;
+-    v->vaQueryConfigProfiles      = rk_QueryConfigProfiles;
+-    v->vaQueryConfigEntrypoints   = rk_QueryConfigEntrypoints;
+-    v->vaGetConfigAttributes      = rk_GetConfigAttributes;
+-    v->vaCreateConfig             = rk_CreateConfig;
+-    v->vaDestroyConfig            = rk_DestroyConfig;
+-    v->vaQueryConfigAttributes    = rk_QueryConfigAttributes;
+-    v->vaCreateSurfaces           = rk_CreateSurfaces;
+-    v->vaDestroySurfaces          = rk_DestroySurfaces;
+-    v->vaCreateContext            = rk_CreateContext;
+-    v->vaDestroyContext           = rk_DestroyContext;
+-    v->vaCreateBuffer             = rk_CreateBuffer;
+-    v->vaBufferSetNumElements     = rk_BufferSetNumElements;
+-    v->vaMapBuffer                = rk_MapBuffer;
+-    v->vaUnmapBuffer              = rk_UnmapBuffer;
+-    v->vaDestroyBuffer            = rk_DestroyBuffer;
+-    v->vaBeginPicture             = rk_BeginPicture;
+-    v->vaRenderPicture            = rk_RenderPicture;
+-    v->vaEndPicture               = rk_EndPicture;
+-    v->vaSyncSurface              = rk_SyncSurface;
+-    v->vaQuerySurfaceStatus       = rk_QuerySurfaceStatus;
+-    v->vaQuerySurfaceError        = rk_QuerySurfaceError;
+-    v->vaPutSurface               = rk_PutSurface;
+-    v->vaQueryImageFormats        = rk_QueryImageFormats;
+-    v->vaCreateImage              = rk_CreateImage;
+-    v->vaDeriveImage              = rk_DeriveImage;
+-    v->vaDestroyImage             = rk_DestroyImage;
+-    v->vaSetImagePalette          = rk_SetImagePalette;
+-    v->vaGetImage                 = rk_GetImage;
+-    v->vaPutImage                 = rk_PutImage;
+-    v->vaQuerySubpictureFormats   = rk_QuerySubpicFmts;
+-    v->vaCreateSubpicture         = rk_CreateSubpicture;
+-    v->vaDestroySubpicture        = rk_DestroySubpicture;
+-    v->vaSetSubpictureImage       = rk_SetSubpicImage;
+-    v->vaSetSubpictureChromakey   = rk_SetSubpicChromakey;
+-    v->vaSetSubpictureGlobalAlpha = rk_SetSubpicAlpha;
+-    v->vaAssociateSubpicture      = rk_AssociateSubpic;
+-    v->vaDeassociateSubpicture    = rk_DeassociateSubpic;
+-    v->vaQueryDisplayAttributes   = rk_QueryDisplayAttrs;
+-    v->vaGetDisplayAttributes     = rk_GetDisplayAttrs;
+-    v->vaSetDisplayAttributes     = rk_SetDisplayAttrs;
+-    v->vaBufferInfo               = rk_BufferInfo;
+-    v->vaLockSurface              = rk_LockSurface;
+-    v->vaUnlockSurface            = rk_UnlockSurface;
+-    v->vaGetSurfaceAttributes     = rk_GetSurfaceAttributes;
+-    v->vaCreateSurfaces2          = rk_CreateSurfaces2;
+-    v->vaQuerySurfaceAttributes   = rk_QuerySurfaceAttrs;
+-    v->vaAcquireBufferHandle      = rk_AcquireBufferHandle;
+-    v->vaReleaseBufferHandle      = rk_ReleaseBufferHandle;
+-    v->vaCreateMFContext          = rk_CreateMFContext;
+-    v->vaMFAddContext             = rk_MFAddContext;
+-    v->vaMFReleaseContext         = rk_MFReleaseContext;
+-    v->vaMFSubmit                 = rk_MFSubmit;
+-    v->vaCreateBuffer2            = rk_CreateBuffer2;
+-    v->vaQueryProcessingRate      = rk_QueryProcessingRate;
+-    v->vaExportSurfaceHandle      = rk_ExportSurfaceHandle;
+-    v->vaSyncSurface2             = rk_SyncSurface2;
+-    v->vaSyncBuffer               = rk_SyncBuffer;
+-    v->vaCopy                     = rk_Copy;
+-
+-    LOG("driver init OK — Rockchip RK3588 MPP");
+-    return VA_STATUS_SUCCESS;
+-}
++    v->vaTerminate                = locked_rk_Terminate;
++    v->vaQueryConfigProfiles      = locked_rk_QueryConfigProfiles;
++    v->vaQueryConfigEntrypoints   = locked_rk_QueryConfigEntrypoints;
++    v->vaGetConfigAttributes      = locked_rk_GetConfigAttributes;
++    v->vaCreateConfig             = locked_rk_CreateConfig;
++    v->vaDestroyConfig            = locked_rk_DestroyConfig;
++    v->vaQueryConfigAttributes    = locked_rk_QueryConfigAttributes;
++    v->vaCreateSurfaces           = locked_rk_CreateSurfaces;
++    v->vaDestroySurfaces          = locked_rk_DestroySurfaces;
++    v->vaCreateContext            = locked_rk_CreateContext;
++    v->vaDestroyContext           = locked_rk_DestroyContext;
++    v->vaCreateBuffer             = locked_rk_CreateBuffer;
++    v->vaBufferSetNumElements     = locked_rk_BufferSetNumElements;
++    v->vaMapBuffer                = locked_rk_MapBuffer;
++    v->vaUnmapBuffer              = locked_rk_UnmapBuffer;
++    v->vaDestroyBuffer            = locked_rk_DestroyBuffer;
++    v->vaBeginPicture             = locked_rk_BeginPicture;
++    v->vaRenderPicture            = locked_rk_RenderPicture;
++    v->vaEndPicture               = locked_rk_EndPicture;
++    v->vaSyncSurface              = locked_rk_SyncSurface;
++    v->vaQuerySurfaceStatus       = locked_rk_QuerySurfaceStatus;
++    v->vaQuerySurfaceError        = locked_rk_QuerySurfaceError;
++    v->vaPutSurface               = locked_rk_PutSurface;
++    v->vaQueryImageFormats        = locked_rk_QueryImageFormats;
++    v->vaCreateImage              = locked_rk_CreateImage;
++    v->vaDeriveImage              = locked_rk_DeriveImage;
++    v->vaDestroyImage             = locked_rk_DestroyImage;
++    v->vaSetImagePalette          = locked_rk_SetImagePalette;
++    v->vaGetImage                 = locked_rk_GetImage;
++    v->vaPutImage                 = locked_rk_PutImage;
++    v->vaQuerySubpictureFormats   = locked_rk_QuerySubpicFmts;
++    v->vaCreateSubpicture         = locked_rk_CreateSubpicture;
++    v->vaDestroySubpicture        = locked_rk_DestroySubpicture;
++    v->vaSetSubpictureImage       = locked_rk_SetSubpicImage;
++    v->vaSetSubpictureChromakey   = locked_rk_SetSubpicChromakey;
++    v->vaSetSubpictureGlobalAlpha = locked_rk_SetSubpicAlpha;
++    v->vaAssociateSubpicture      = locked_rk_AssociateSubpic;
++    v->vaDeassociateSubpicture    = locked_rk_DeassociateSubpic;
++    v->vaQueryDisplayAttributes   = locked_rk_QueryDisplayAttrs;
++    v->vaGetDisplayAttributes     = locked_rk_GetDisplayAttrs;
++    v->vaSetDisplayAttributes     = locked_rk_SetDisplayAttrs;
++    v->vaBufferInfo               = locked_rk_BufferInfo;
++    v->vaLockSurface              = locked_rk_LockSurface;
++    v->vaUnlockSurface            = locked_rk_UnlockSurface;
++    v->vaGetSurfaceAttributes     = locked_rk_GetSurfaceAttributes;
++    v->vaCreateSurfaces2          = locked_rk_CreateSurfaces2;
++    v->vaQuerySurfaceAttributes   = locked_rk_QuerySurfaceAttrs;
++    v->vaAcquireBufferHandle      = locked_rk_AcquireBufferHandle;
++    v->vaReleaseBufferHandle      = locked_rk_ReleaseBufferHandle;
++    v->vaCreateMFContext          = locked_rk_CreateMFContext;
++    v->vaMFAddContext             = locked_rk_MFAddContext;
++    v->vaMFReleaseContext         = locked_rk_MFReleaseContext;
++    v->vaMFSubmit                 = locked_rk_MFSubmit;
++    v->vaCreateBuffer2            = locked_rk_CreateBuffer2;
++    v->vaQueryProcessingRate      = locked_rk_QueryProcessingRate;
++    v->vaExportSurfaceHandle      = locked_rk_ExportSurfaceHandle;
++    v->vaSyncSurface2             = locked_rk_SyncSurface2;
++    v->vaSyncBuffer               = locked_rk_SyncBuffer;
++    v->vaCopy                     = locked_rk_Copy;
++
++    LOG("driver init OK — LinuxHost experimental H264");
++    return VA_STATUS_SUCCESS;
++}
+--- a/src/h264.c
++++ b/src/h264.c
+@@ -122,7 +122,7 @@
+ }
+ 
+ int h264_write_pps(uint8_t *buf, size_t buf_size,
+-                   const VAPictureParameterBufferH264 *pp)
++                   const VAPictureParameterBufferH264 *pp, unsigned refs0, unsigned refs1)
+ {
+     uint8_t raw[256];
+     BSWriter bs;
+@@ -138,8 +138,8 @@
+     bs_write_ue(&bs, 0); /* num_slice_groups_minus1 = 0 */
+ 
+     /* num_ref_idx_l0/l1_default: use conservative default (0 = 1 ref) */
+-    bs_write_ue(&bs, 0);
+-    bs_write_ue(&bs, 0);
++    bs_write_ue(&bs, refs0);
++    bs_write_ue(&bs, refs1);
+ 
+     bs_write(&bs, pp->pic_fields.bits.weighted_pred_flag, 1);
+     bs_write(&bs, pp->pic_fields.bits.weighted_bipred_idc, 2);
+--- a/src/h264.h
++++ b/src/h264.h
+@@ -15,4 +15,4 @@
+                    int profile_idc);
+ 
+ int h264_write_pps(uint8_t *buf, size_t buf_size,
+-                   const VAPictureParameterBufferH264 *pp);
++                   const VAPictureParameterBufferH264 *pp, unsigned refs0, unsigned refs1);

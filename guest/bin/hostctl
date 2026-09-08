@@ -1,0 +1,17 @@
+#!/usr/bin/python3
+import json, socket, sys
+action = sys.argv[1] if len(sys.argv) > 1 else 'status'
+request = {'action': action}
+if action == 'authenticate':
+    request['purpose'] = sys.argv[2] if len(sys.argv) > 2 else 'test'
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(85)
+        client.connect('/run/linuxhost/agent.sock')
+        client.sendall(json.dumps(request).encode() + b'\n')
+        response = json.loads(client.makefile('rb').readline(16384))
+    print(json.dumps(response, indent=2))
+    sys.exit(0 if response.get('ok') else 1)
+except Exception as error:
+    print(json.dumps({'ok': False, 'error': str(error)}))
+    sys.exit(1)

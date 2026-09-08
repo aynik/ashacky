@@ -1,0 +1,80 @@
+diff --git a/ffmpeg/libavcodec/vtremote_dec_common.c b/ffmpeg/libavcodec/vtremote_dec_common.c
+index 8bb930e..985a5da 100644
+--- a/ffmpeg/libavcodec/vtremote_dec_common.c
++++ b/ffmpeg/libavcodec/vtremote_dec_common.c
+@@ -15,6 +15,7 @@
+ #else
+ #include <sys/socket.h>
+ #include <netdb.h>
++#include <netinet/tcp.h>
+ #include <unistd.h>
+ #include <sys/time.h>
+ #include <poll.h>
+@@ -100,6 +101,8 @@ static int set_socket_timeout(int fd, int timeout_ms)
+ static void configure_socket_buffers(int fd)
+ {
+     vtremote_disable_sigpipe(fd);
++    int nodelay = 1;
++    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof nodelay);
+ 
+     /* 16MB buffers to sustain multi-gigabit links */
+     int bufsize = 16 * 1024 * 1024;
+diff --git a/vtremoted/Sources/VTRemotedCore/VideoToolboxCodecSession.swift b/vtremoted/Sources/VTRemotedCore/VideoToolboxCodecSession.swift
+index d77bedb..77add06 100644
+--- a/vtremoted/Sources/VTRemotedCore/VideoToolboxCodecSession.swift
++++ b/vtremoted/Sources/VTRemotedCore/VideoToolboxCodecSession.swift
+@@ -915,7 +915,7 @@
+         func handlePacketMessage(_ payload: Data) throws {
+             guard let config else { throw VTRemotedError.protocolViolation("PACKET before CONFIGURE") }
+             guard config.mode == .decode || config.mode == .transcode else { return }
+-            guard let session = decompressionSession, let fmt = formatDescription else {
++            guard let session = decompressionSession, var fmt = formatDescription else {
+                 throw VTRemotedError.videoToolboxUnavailable
+             }
+ 
+@@ -929,6 +929,17 @@
+             let sideData = try Self.readWireSideData(&reader)
+             storePendingDecodeSideData(ptsTicks: ptsTicks, sideData: sideData)
+ 
++            // VA-API supplies active reference counts per picture. Accept updated
++            // reconstructed parameter sets without discarding decoder references.
++            if config.codec == .h264, let nextFormat = try? formatDescriptionFromAnnexB(annexB,
++                codec: config.codec, codecType: config.codec == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC,
++                nalLength: nalLengthField) {
++                guard VTDecompressionSessionCanAcceptFormatDescription(session, formatDescription: nextFormat) else {
++                    throw VTRemotedError.protocolViolation("unsupported decoder format change")
++                }
++                fmt = nextFormat
++                formatDescription = nextFormat
++            }
+             let lengthPrefixed = AnnexB.toLengthPrefixed(annexB, lengthSize: nalLengthField)
+ 
+             var block: CMBlockBuffer?
+@@ -2387,7 +2398,7 @@
+             let status = VTDecompressionSessionCreate(
+                 allocator: kCFAllocatorDefault,
+                 formatDescription: fmt,
+-                decoderSpecification: nil,
++                decoderSpecification: [kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true] as CFDictionary,
+                 imageBufferAttributes: attrs as CFDictionary,
+                 outputCallback: &callback,
+                 decompressionSessionOut: &decompressionSessionPtr
+@@ -2396,6 +2407,18 @@
+                 throw VTRemotedError.ioError(code: Int32(status), message: "VTDecompressionSessionCreate failed")
+             }
+             
++            // LinuxHost probe: fail closed and record the actual selected decoder.
++            var hardwareValue: CFTypeRef?
++            let hardwareStatus = VTSessionCopyProperty(session,
++                key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
++                allocator: kCFAllocatorDefault, valueOut: &hardwareValue)
++            guard hardwareStatus == noErr,
++                  let hardware = hardwareValue as? NSNumber, hardware.boolValue else {
++                VTDecompressionSessionInvalidate(session)
++                throw VTRemotedError.protocolViolation("LinuxHost requires hardware video decoding")
++            }
++            logger.info("LinuxHost hardware_decode=true codec=\(config.codec) size=\(config.width)x\(config.height)")
++
+             // Apply RealTime property
+             let isRealtime: CFBoolean
+             if config.options.realtime >= 0 {

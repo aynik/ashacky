@@ -1,0 +1,4 @@
+* text=auto
+# Preserve imported patch/license whitespace; it is part of upstream material.
+patches/* -whitespace
+LICENSES/* -whitespace

@@ -1,0 +1,15 @@
+[Unit]
+Description=Host battery telemetry to Linux power supply driver
+After=linuxhost-agent.service systemd-modules-load.service
+Requires=linuxhost-agent.service
+[Service]
+ExecStartPre=/sbin/modprobe linuxhost_battery
+ExecStart=/usr/bin/python3 /opt/linuxhost-probe/battery/feed.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/sys/devices/platform/linuxhost-battery
+[Install]
+WantedBy=multi-user.target

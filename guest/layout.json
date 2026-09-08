@@ -1,0 +1,217 @@
+{
+  "schema": 1,
+  "note": "Source/build-to-guest installation map. Does not apply config, enable services, install dependencies, or alter package ownership. Preserve compatibility paths until a coordinated migration.",
+  "files": [
+    {
+      "source": "guest/devices/audio_management.py",
+      "target": "/opt/linuxhost-probe/audio_management.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/audio_pipewire.py",
+      "target": "/opt/linuxhost-probe/audio_pipewire.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/bluetooth_bluez.py",
+      "target": "/opt/linuxhost-probe/bluetooth_bluez.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/bluetooth_management.py",
+      "target": "/opt/linuxhost-probe/bluetooth_management.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/camera_bridge.py",
+      "target": "/opt/linuxhost-probe/camera_bridge.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/camera_demand.py",
+      "target": "/opt/linuxhost-probe/camera_demand.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/device_service.py",
+      "target": "/opt/linuxhost-probe/device_service.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/probe-devices.py",
+      "target": "/opt/linuxhost-probe/probe-devices.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/wifi_bridge.py",
+      "target": "/opt/linuxhost-probe/wifi_bridge.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/wifi_power.py",
+      "target": "/opt/linuxhost-probe/wifi_power.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/wifi_scan.py",
+      "target": "/opt/linuxhost-probe/wifi_scan.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/input/trackpad.py",
+      "target": "/opt/linuxhost-probe/trackpad/trackpad.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/drivers/battery/feed.py",
+      "target": "/opt/linuxhost-probe/battery/feed.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/libexec/linuxhost-agent",
+      "target": "/usr/local/libexec/linuxhost-agent",
+      "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/libexec/linuxhost-session-sync",
+      "target": "/usr/local/libexec/linuxhost-session-sync",
+      "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/libexec/linuxhost-video-memory",
+      "target": "/usr/local/libexec/linuxhost-video-memory",
+      "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/bin/hostctl",
+      "target": "/usr/local/bin/hostctl",
+      "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-agent.service",
+      "target": "/etc/systemd/system/linuxhost-agent.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-battery.service",
+      "target": "/etc/systemd/system/linuxhost-battery.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-probe-bluetooth.service",
+      "target": "/etc/systemd/system/linuxhost-probe-bluetooth.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-probe-camera.service",
+      "target": "/etc/systemd/system/linuxhost-probe-camera.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-probe-devices.service",
+      "target": "/etc/systemd/system/linuxhost-probe-devices.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-probe-management.service",
+      "target": "/etc/systemd/system/linuxhost-probe-management.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-probe-wifi-power.service",
+      "target": "/etc/systemd/system/linuxhost-probe-wifi-power.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-probe-wifi.service",
+      "target": "/etc/systemd/system/linuxhost-probe-wifi.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-trackpad.service",
+      "target": "/etc/systemd/system/linuxhost-trackpad.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/linuxhost-video-memory.service",
+      "target": "/etc/systemd/system/linuxhost-video-memory.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/user/linuxhost-audio-pipewire.service",
+      "target": "/etc/systemd/user/linuxhost-audio-pipewire.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/user/linuxhost-video-direct.service",
+      "target": "/etc/systemd/user/linuxhost-video-direct.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/user/linuxhost-video-direct.socket",
+      "target": "/etc/systemd/user/linuxhost-video-direct.socket",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/gnome/linuxhost@local/extension.js",
+      "target": "/usr/share/gnome-shell/extensions/linuxhost@local/extension.js",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/gnome/linuxhost@local/metadata.json",
+      "target": "/usr/share/gnome-shell/extensions/linuxhost@local/metadata.json",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "build/guest/camera-readers",
+      "target": "/opt/linuxhost-probe/camera-readers",
+      "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "build/guest/decoder-worker-direct-va",
+      "target": "/opt/linuxhost-video/bin/decoder-worker-direct-va",
+      "mode": "0755",
+      "owner": "root:root"
+    }
+  ],
+  "distroSpecific": {
+    "pam_linuxhost.so": "PAM module directory discovered from the distro; insert selected-user rule while preserving password fallback",
+    "ashacky_drv_video.so": "libva driver directory, with a recorded distro-native virtio_gpu driver diversion",
+    "remote FFmpeg libraries": "/opt/linuxhost-video/lib with matching broker rpath",
+    "DKMS": "guest/drivers source directories installed under the matching /usr/src package name, dkms add/build/install",
+    "configuration": "Generate user ID, VM/NIC identity, NetworkManager/system networking, PAM/GNOME and codec endpoint configuration outside tracked source"
+  }
+}

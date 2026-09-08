@@ -1,0 +1,68 @@
+[submodule "cocoaspice"]
+	path = third_party/cocoaspice
+	url = https://github.com/utmapp/CocoaSpice.git
+	shallow = true
+[submodule "videotoolbox-remote"]
+	path = third_party/videotoolbox-remote
+	url = https://github.com/davelindo/videotoolbox_remote.git
+	shallow = true
+[submodule "rockchip-vaapi"]
+	path = third_party/rockchip-vaapi
+	url = https://github.com/woodyst/rockchip-vaapi.git
+	shallow = true
+[submodule "angle-webkit"]
+	path = third_party/angle-webkit
+	url = https://github.com/utmapp/WebKit.git
+	shallow = true
+[submodule "libepoxy"]
+	path = third_party/libepoxy
+	url = https://github.com/utmapp/libepoxy.git
+	shallow = true
+[submodule "vulkan-loader"]
+	path = third_party/vulkan-loader
+	url = https://github.com/osy/Vulkan-Loader.git
+	shallow = true
+[submodule "virglrenderer"]
+	path = third_party/virglrenderer
+	url = https://github.com/utmapp/virglrenderer.git
+	shallow = true
+[submodule "moltenvk"]
+	path = third_party/moltenvk
+	url = https://github.com/utmapp/MoltenVK.git
+	shallow = true
+[submodule "utm"]
+	path = third_party/utm
+	url = https://github.com/utmapp/UTM.git
+	shallow = true
+[submodule "socket-vmnet"]
+	path = third_party/socket-vmnet
+	url = https://github.com/lima-vm/socket_vmnet.git
+	shallow = true
+[submodule "spice-protocol"]
+	path = third_party/spice-protocol
+	url = https://gitlab.freedesktop.org/spice/spice-protocol.git
+	shallow = true
+[submodule "spice-server"]
+	path = third_party/spice-server
+	url = https://gitlab.freedesktop.org/spice/spice.git
+	shallow = true
+[submodule "spice-gtk"]
+	path = third_party/spice-gtk
+	url = https://gitlab.freedesktop.org/spice/spice-gtk.git
+	shallow = true
+[submodule "gstreamer"]
+	path = third_party/gstreamer
+	url = https://github.com/GStreamer/gstreamer.git
+	shallow = true
+[submodule "gst-plugins-base"]
+	path = third_party/gst-plugins-base
+	url = https://github.com/GStreamer/gst-plugins-base.git
+	shallow = true
+[submodule "gst-plugins-good"]
+	path = third_party/gst-plugins-good
+	url = https://github.com/GStreamer/gst-plugins-good.git
+	shallow = true
+[submodule "keycodemapdb"]
+	path = third_party/keycodemapdb
+	url = https://github.com/qemu/keycodemapdb.git
+	shallow = true

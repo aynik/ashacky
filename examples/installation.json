@@ -1,0 +1,19 @@
+{
+  "hostUser": "linux",
+  "hostUID": 501,
+  "hostHome": "/Users/example",
+  "group": "ashacky-501",
+  "groupID": 550,
+  "hostPython": "/opt/homebrew/bin/python3",
+  "checkout": "/Users/example/ashacky",
+  "privateDirectory": "/Users/example/.ashacky",
+  "managementSubnet": "192.168.90.0/24",
+  "hostAddress": "192.168.90.1",
+  "fallbackAddress": "192.168.90.2",
+  "guestUser": "debian",
+  "guestUID": 1000,
+  "guestManagementInterface": "enp0s1",
+  "guestWifiInterface": "enp0s2",
+  "memoryMiB": 8192,
+  "cpus": 4
+}

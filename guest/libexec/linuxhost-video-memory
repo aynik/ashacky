@@ -1,0 +1,22 @@
+#!/usr/bin/python3
+"""Grant this guest's desktop user read-only access to the video PCI BAR."""
+from pathlib import Path
+import os,pwd,json
+if os.geteuid()!=0:raise SystemExit('root required')
+uid=json.loads(Path('/etc/linuxhost.json').read_text())['userID']
+if type(uid) is not int or uid <= 0:raise ValueError('A non-root guest userID is required')
+user=pwd.getpwuid(uid);runtime=Path('/run/linuxhost-video');runtime.mkdir(mode=0o755,exist_ok=True)
+for d in Path('/sys/bus/pci/devices').iterdir():
+ if (d/'vendor').read_text().strip()!='0x1234' or (d/'device').read_text().strip()!='0x11f0':continue
+ # This prototype exposes exactly one 64 MiB, prefetchable memory BAR.
+ fields=(d/'resource').read_text().splitlines()[0].split();start,end,flags=map(lambda x:int(x,16),fields)
+ if not start or end-start+1!=64*1024*1024:raise RuntimeError('unexpected video BAR size')
+ if (d/'enable').read_text().strip()=='0':(d/'enable').write_text('1')
+ resource=d/'resource0_wc';os.chown(resource,0,user.pw_gid);os.chmod(resource,0o640)
+ link=runtime/'resource';tmp=runtime/'resource.new'
+ tmp.unlink(missing_ok=True);tmp.symlink_to(resource);os.replace(tmp,link)
+ print('Video shared memory ready:',d.name)
+ break
+else:
+ (runtime/'resource').unlink(missing_ok=True)
+ print('No shared-memory device; video broker will use legacy transport')

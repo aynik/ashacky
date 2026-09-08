@@ -1,0 +1,22 @@
+[Unit]
+Description=LinuxHost native Bluetooth management
+After=linuxhost-probe-management.service
+Requires=linuxhost-probe-management.service
+
+[Service]
+Type=dbus
+BusName=org.bluez
+ExecStartPre=/sbin/modprobe linuxhost_bt_rfkill
+ExecStart=/usr/bin/python3 /opt/linuxhost-probe/bluetooth_bluez.py --system --duration 0
+ExecStopPost=-/sbin/rmmod linuxhost_bt_rfkill
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
