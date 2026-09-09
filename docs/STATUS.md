@@ -45,6 +45,12 @@ The updated guest module delegates automatic AP selection to macOS and reports t
 
 The module and matching guest files are installed. Three rapid off/on cycles reconnected in 2.4–3.7 seconds with matching host/guest APs and no different-BSSID failures; the Wi-Fi packet-path check passed. One cycle still logged transient macOS operation failures before recovering, so these samples do not establish retry-free or guaranteed reconnection latency. Unit and isolated kernel checks cover roaming, generation races, security and explicit-pin enforcement. Physical roaming between APs has not yet been observed with this update.
 
+## Camera demand
+
+The camera service and usage helper use blocking event waits while idle. Reader demand starts host capture; reader closure stops it and replaces the last image with generated black frames. Loss of the usage monitor or writer wakes the service for recovery. The existing stream lease, cancellation limits and bounded retries remain, as does FFmpeg's internal worker behavior. The usage-event contract is verified with v4l2loopback 0.15.4; other versions require acceptance.
+
+The updated pair is installed. An 18-second idle sample went from 179 main-loop wakeups and one usage-helper wakeup to zero for both. Two live discard-sink captures delivered host frames and returned to inactive demand; an intentional monitor exit produced one systemd recovery and reaped the old children. No recording was saved. App-specific visual quality and sleep/wake with this refinement remain separate checks.
+
 ## Video limits
 
 The retained general VA-API path supports the tested H.264 and VP9 cases. VP9 shared-memory output substantially improved 1080p60 playback. mpv works with `vaapi-copy`; occasional fullscreen 4K60 drops remain possible. Firefox 4K60 is not reliable and may fall back to software or drop many frames. Software support for a codec does not imply host hardware acceleration: do not advertise HEVC, AV1 or VP8 as completed accelerated paths.

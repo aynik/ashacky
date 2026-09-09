@@ -108,6 +108,14 @@ The connection contract is open Wi-Fi or WPA2-PSK with CCMP. Enterprise authenti
 
 The guest bridge watches atomic status replacements with inotify and wakes its existing kernel `poll()` when `wifiRevision` changes. Heartbeats do not trigger extra host reads. Roam verification uses fresh scan information and a second identity read after the scan, since scanning can take seconds. A missing identity must persist across a one-second confirmation deadline before link loss is reported; unavailable Location authorization is not treated as a disconnect. The existing five-second signal refresh also provides link reconciliation for old/stale frontends and missed events. Signal notifications remain a separate refinement.
 
+## Camera demand events
+
+The camera service keeps the V4L2 device discoverable with a persistent FFmpeg writer primed with generated black frames. The usage helper subscribes to v4l2loopback's private client-usage event, requesting an initial snapshot, and blocks in `poll()` until an event or channel failure. This contract was verified against v4l2loopback 0.15.4; the reported value is a reader-active boolean, not a reader count. An incompatible module must fail visibly instead of opening the host camera without reliable demand tracking.
+
+The guest's idle Python loop waits on an event signaled by demand changes, termination or child exit. The usage pipe has a blocking reader and the writer has a blocking process waiter. Loss of the monitor clears demand and fails the service for systemd recovery; writer failure also wakes the service. When the final reader stops, the host socket closes and generated black frames replace the last camera image. The change removes the service's 100 ms idle check and the usage helper's periodic 15-second wakeup. FFmpeg's internal worker behavior is unchanged.
+
+Active capture retains its five-second startup timeout, one-second streaming cancellation bound, half-second retry/lease-renewal delay and the host's 30-second stream lease. Child cleanup has bounded terminate/kill waits. These are operation/recovery limits; the service does not open the camera periodically while idle. A finite usage-helper diagnostic still has a 15-second event timeout.
+
 ## Video memory ownership
 
 VP9 compressed packets and frame descriptors traverse the broker connection. Decoded frames occupy four host-owned 16 MiB slots in a shared 64 MiB mapping exposed by the `linuxhost-shmem` PCI device. The VA driver validates frame identity and bounds, then copies each frame into stable per-surface storage so applications can retain older surfaces safely. GPU upload remains a separate step. This is not zero-copy rendering. The queued-driver experiment is intentionally absent.

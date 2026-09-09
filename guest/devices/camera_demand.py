@@ -18,8 +18,12 @@ def serve(path, device, monitor_path):
     black = bytes([16]) * (width * height) + bytes([128]) * (width * height // 2)
     active = threading.Event()
     stopping = threading.Event()
+    changed = threading.Event()
+    writer_done = threading.Event()
+    monitor_done = threading.Event()
     def stop(*_):
         stopping.set()
+        changed.set()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     writer = subprocess.Popen(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-filter_threads', '1',
@@ -35,11 +39,19 @@ def serve(path, device, monitor_path):
                     active.set()
                 else:
                     active.clear()
+                changed.set()
         finally:
             active.clear()
-            stopping.set()  # Never keep capturing after loss of demand tracking.
+            monitor_done.set()
+            changed.set()  # Never keep capturing after loss of demand tracking.
+    def watch_writer():
+        writer.wait()
+        writer_done.set()
+        changed.set()
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
+    writer_watcher = threading.Thread(target=watch_writer, daemon=True)
+    writer_watcher.start()
     try:
         # Prime FFmpeg and establish output ownership/capture capability. No
         # physical camera is opened during this initialization.
@@ -49,9 +61,17 @@ def serve(path, device, monitor_path):
         print(json.dumps({'camera_device_ready': True, 'host_capture_started': False}), flush=True)
         last_error = None
         while not stopping.is_set():
-            if writer.poll() is not None:
+            # Clear before checking predicates so concurrent demand, stop or
+            # child-exit notifications cannot be lost before this wait.
+            changed.clear()
+            if stopping.is_set():
+                break
+            if writer_done.is_set():
                 raise RuntimeError('Camera producer exited')
-            if not active.wait(.1):
+            if monitor_done.is_set():
+                raise RuntimeError('Camera demand monitor exited')
+            if not active.is_set():
+                changed.wait()
                 continue
             received = 0
             try:
@@ -89,6 +109,8 @@ def serve(path, device, monitor_path):
             if active.is_set():
                 stopping.wait(.5)  # Bounded retry / renew 30-second host stream.
     finally:
+        stopping.set()
+        changed.set()
         monitor.terminate()
         try:
             monitor.wait(timeout=3)
@@ -102,6 +124,8 @@ def serve(path, device, monitor_path):
             writer.wait(timeout=3)
         except subprocess.TimeoutExpired:
             writer.kill(); writer.wait()
+        watcher.join(timeout=1)
+        writer_watcher.join(timeout=1)
 
 
 if __name__ == '__main__':

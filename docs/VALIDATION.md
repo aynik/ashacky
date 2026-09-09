@@ -173,6 +173,16 @@ These bounded samples show the association mismatch is resolved for the tested a
 
 Isolated Debian staging included the matching bridge, scan, link and event companions plus DKMS source, with verified hashes, root ownership, readable parent directories and the existing service/module actions. The temporary payload was removed without installing it. Guide review passed 28 shell blocks and resolved 30 relative links/anchors.
 
+## Camera demand event refinement
+
+Two isolated lifecycle tests use private sockets, generated pixels and real child pipes. They cover demand-triggered capture, reader closure followed by black replacement frames, idle termination, monitor/writer exit, wakeup and child cleanup without contacting a camera. The rebuilt usage helper compiled with `-Wall -Wextra` without warnings. The installed v4l2loopback 0.15.4 source confirms the private usage-event boolean and initial-snapshot behavior. The helper now blocks indefinitely for ordinary service usage; finite diagnostics retain their event timeout, and failed/hung-up descriptors exit instead of spinning.
+
+An isolated Debian payload contained the matching script and rebuilt helper with verified hashes, root ownership, 0644/0755 file modes, readable parent directories and the existing camera service action. The temporary payload was removed without installation. The subsequent controlled update preserved private originals and receipt history, replaced only the camera pair, and restarted only its systemd service. The canonical build, installed files and receipt hashes agree; no host app, permission grant, VM or module changed.
+
+With no active reader, the old main loop had 179 context switches and the usage helper had one in an 18-second sample. The updated main loop and helper each had zero over the same interval. FFmpeg's own internal worker wakeups remain. A live V4L2 discard sink received 90 frames, with 90 host frames delivered and demand inactive after reader closure. An intentional idle monitor termination then caused exactly one systemd restart, reaped the previous writer/monitor and returned to idle; a second discard-sink run received 60 host frames and again closed demand. No images or recordings were saved. Source fixtures establish black-frame replacement; the live tests establish frame delivery and lifecycle, not subjective image quality or sleep/wake behavior.
+
+The existing host log confirmed camera shutdown after both readers closed. All 59 source tests passed on Linux; guide review checked 30 shell blocks and resolved 33 relative links/anchors.
+
 ## Remaining validation limits
 
 These checks establish functional build/staging reproduction with the recorded host SDK and existing Homebrew prerequisites, not byte-identical output or clean-machine installation. The isolated audit did not install or boot its outputs. The later controlled migration installed guest services and the PAM module path with password fallback; the reference host cutover now works, while full macOS logout/login after final cleanup and fresh-account acceptance remain pending. The cloud-init seed attachment, fresh-account boot, hardware/session behavior after parameterization, other distro adapters, and receipt-driven migration/uninstall still require attended acceptance. See [INSTALL.md](INSTALL.md).

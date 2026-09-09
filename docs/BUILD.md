@@ -14,7 +14,7 @@ A clone made with `--recurse-submodules` already initializes them. Recursive ini
 
 On macOS, Apple's `/usr/bin/python3` may be older than required. Put the chosen Python 3.12+ and `pkg-config` on PATH before invoking `./ashacky`; verify with `./ashacky inventory`. For an Apple Silicon Homebrew installation this normally means adding `/opt/homebrew/bin` to PATH, including in non-interactive SSH build commands. Runtime LaunchAgents must use discovered absolute executable paths.
 
-`./ashacky check` runs on either OS. Linux integration tests for evdev, inotify, GIO, PipeWire monitoring, Wi-Fi request readiness and the private Bluetooth bus are reported as skipped on macOS. On Linux, use the distro's Python with its evdev and PyGObject/GIO bindings. Install `dbus-daemon` so the private-bus check runs instead of being skipped; that test uses `dbus-run-session` and never claims the live system bus. Wi-Fi readiness tests use pipes and private socket fixtures, not the installed module or physical radio; compile and live module checks remain separate.
+`./ashacky check` runs on either OS. Linux integration tests for evdev, inotify, GIO, PipeWire monitoring, Wi-Fi request readiness, camera lifecycle and the private Bluetooth bus are reported as skipped on macOS. On Linux, use the distro's Python with its evdev and PyGObject/GIO bindings. Install `dbus-daemon` so the private-bus check runs instead of being skipped; that test uses `dbus-run-session` and never claims the live system bus. Wi-Fi readiness tests use pipes and private socket fixtures, not the installed module or physical radio; compile and live module checks remain separate. Camera tests likewise use generated pixels, private sockets and child pipes, with no camera device or host capture.
 
 The ANGLE dependency is part of UTM's WebKit fork and can be large. An optional sparse checkout inside `third_party/angle-webkit` can keep only `Source/ThirdParty/ANGLE`, `Configurations` and `Tools/ccache` in its working tree; the recorded commit must remain unchanged.
 
@@ -39,6 +39,15 @@ This is not the guest runtime package list. The kernel build additionally needs 
 ```
 
 This prepares the pinned rockchip-vaapi source with Ashacky's patch and compiles it with the maintained `guest/video` helpers. It produces the PAM module, camera-reader utility and VA driver. The kernel option builds Wi-Fi, Bluetooth rfkill and battery modules in `build/guest/drivers`. The distribution supplies v4l2loopback.
+
+For a camera-only update, rebuild just its usage helper inside the guest:
+
+```sh
+mkdir -p build/guest
+cc -O2 -Wall -Wextra guest/devices/camera_readers.c -o build/guest/camera-readers
+```
+
+Stage this binary with `camera_demand.py` from the same checkout. The build needs the distro's Linux UAPI headers; runtime additionally requires the v4l2loopback client-usage event verified with version 0.15.4. The helper does not replace or rebuild v4l2loopback. See [camera update and acceptance](DEVELOPMENT.md#updating-camera-demand-events).
 
 ### Optional Wi-Fi kernel link check
 

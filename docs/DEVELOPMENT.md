@@ -153,3 +153,21 @@ For physical acceptance, use the existing unpinned profile and a verified indepe
 When suitable multi-AP hardware is available, verify a real host roam updates Linux without a disconnect, and that host network changes/loss are reported correctly. Synthetic cfg80211 tests do not replace this check. Missing identity uses a one-second confirmation deadline; missing Location authorization must not cause a false disconnect. The existing five-second signal refresh reconciles missed events or stale capabilities. Event delivery cannot bypass synchronous host scan/association time. The supported security contract remains open Wi-Fi or WPA2-PSK/CCMP, without enterprise authentication, SAE or required PMF.
 
 Recovery restores the matching bridge/scan/link/dependency files, DKMS source and private receipt, then rebuilds and reloads the previous module using the same procedure. Remove a newly introduced companion only if the recovery record says it was absent before. Keep the host app, profiles and permission grants intact.
+
+### Updating camera demand events
+
+Run the source checks and [camera helper build](BUILD.md#guest-components), then stage the payload. Preserve the installed `/opt/linuxhost-probe/camera_demand.py`, `/opt/linuxhost-probe/camera-readers` and receipt before replacing them. The script is root-owned 0644; the compiled helper is root-owned 0755, with readable parent directories. Record both installed hashes. No new host app, permission, QEMU device, kernel module build or VM restart is needed.
+
+Check demand before restarting only `linuxhost-probe-camera.service`:
+
+```sh
+sudo /opt/linuxhost-probe/camera-readers /dev/video10 1
+systemctl status linuxhost-probe-camera.service --no-pager
+journalctl -u linuxhost-probe-camera.service -b --no-pager
+```
+
+The finite helper reads the initial usage event without reading frames. Defer replacement if `camera_reader_active` is true. A subscription failure means the installed v4l2loopback lacks the required private event; check its version/source instead of starting continuous capture. After restart, expect `camera_device_ready: true` with `host_capture_started: false`, one FFmpeg writer and one usage-helper child. The Python service and helper should block while idle; ordinary FFmpeg worker wakeups are separate from these waits.
+
+For live acceptance, open a camera reader briefly, then close it. Use a discard sink for automated checks; never save frames or captures in the repo. Confirm positive `camera_stream_frames` followed by `reader_still_active: false`, no active reader afterward and a healthy service. The source fixtures check that the last frame is replaced by black and that idle stop, monitor exit and writer exit wake/reap the service. An intentional monitor-exit recovery check belongs only in a quiet test window: it should produce one systemd restart, reap both old children and return to idle until another reader opens. Record that deliberate restart separately from unexpected failures.
+
+Preserve the existing capture/cancellation timeouts, host stream lease and child-cleanup deadlines. Idle waits must not prevent shutdown or leave capture running when demand tracking fails. For recovery, stop the camera unit, restore the recorded script/helper and receipt, then restart that unit. A source revert alone does not restore the installed binary. Keep the current host app, camera grant and v4l2loopback configuration intact.

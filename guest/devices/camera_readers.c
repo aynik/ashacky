@@ -29,10 +29,15 @@ int main(int argc, char **argv)
     }
     while (!limit || received < limit) {
         struct pollfd descriptor = { .fd = fd, .events = POLLPRI };
-        int ready = poll(&descriptor, 1, 15000);
+        /* A finite diagnostic request has a deadline. The long-lived service
+         * needs only usage/removal events, with no periodic idle wakeup. */
+        int ready = poll(&descriptor, 1, limit ? 15000 : -1);
         if (ready < 0 && errno == EINTR) continue;
         if (ready == 0 && !limit) continue;
         if (ready <= 0) { close(fd); return 2; }
+        if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            fputs("camera usage channel unavailable\n", stderr); close(fd); return 1;
+        }
         struct v4l2_event event;
         memset(&event, 0, sizeof(event));
         if (ioctl(fd, VIDIOC_DQEVENT, &event)) {
