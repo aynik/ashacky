@@ -103,6 +103,8 @@ The app icon source is `host/frontend/assets/Ashacky.png`, a tightly fitted 1024
 
 `check-runtime.py` copies the generated app to a temporary path containing spaces, verifies signatures and all Mach-O dependencies, queries QEMU's devices/HVF/GPU properties, loads the graphics and codec libraries, tests GStreamer with a silent `fakesink`, and creates the Metal shader pipeline. It opens no desktop window, VM, audio device, microphone, camera, network listener or privileged service. This validates relocation and component availability; it does not validate a fresh guest boot.
 
+The Wi-Fi observer uses the app's existing signature and permission identity. Do not add the restricted `com.apple.wifi.events` entitlement to an ad-hoc signed build: the reference probe was rejected by AMFI with it. Event delivery without that added entitlement was observed on the reference macOS; another release must verify delivery or use the capability fallback. See the Wi-Fi radio section in ARCHITECTURE.md.
+
 ### Frontend-only validation while the VM runs
 
 After a complete runtime build, a frontend-only change can reuse the existing pinned dependencies in a temporary output directory. From the checkout root, use the same Homebrew installation as the runtime build. The initial PATH below includes the standard Apple Silicon Homebrew location so it also works in a non-interactive SSH shell; adjust that entry if Homebrew is elsewhere.

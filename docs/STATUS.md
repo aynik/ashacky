@@ -33,7 +33,11 @@ The native notification path and guest BlueZ event consumer are installed after 
 
 ## Wi-Fi request delivery
 
-The reference guest now uses kernel readiness notifications for scan/connect/disconnect requests instead of the bridge's 100 ms idle checks. The updated module and bridge passed live pending-request, cancellation, restart and scan checks; the existing network reconnected after a module-only reload. The owner confirmed nearby networks appear in GNOME and the connection works. The old-module compatibility path was also exercised before activation. A complete host disconnect/reconnect and radio toggle have not been repeated for this refinement. Host radio synchronization still runs once per second and signal strength still refreshes every five seconds; actual host scan/association time is unchanged.
+The reference guest now uses kernel readiness notifications for scan/connect/disconnect requests instead of the bridge's 100 ms idle checks. The updated module and bridge passed live pending-request, cancellation, restart and scan checks; the existing network reconnected after a module-only reload. The owner confirmed nearby networks appear in GNOME and the connection works. The old-module compatibility path was also exercised before activation. A complete host disconnect/reconnect and radio toggle have not been repeated for this refinement. The new radio event refinement is described below. Signal strength still refreshes every five seconds; actual host scan/association time is unchanged.
+
+## Wi-Fi radio synchronization
+
+The updated frontend and guest radio service are active after a clean VM restart. External macOS power changes update Linux through CoreWLAN notifications, and Linux rfkill changes control host power; both off/on paths passed over Ethernet and the existing network reconnected. An idle sample across three status updates left the radio RPC worker asleep. The owner confirmed fast disconnection through GNOME and eventual reconnection. That attended reconnection exposed repeated association failures: the existing bridge rejects a different BSSID even when macOS reports the requested SSID. This can add substantial delay and needs a separate connection-path fix; the successful event tests do not establish fast association. Missing/stale capability retains one-second host-status refresh. Signal quality remains a separate refinement.
 
 ## Video limits
 

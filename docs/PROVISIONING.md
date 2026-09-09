@@ -83,6 +83,8 @@ Bluetooth and audio also consume the status channel. Install all three Bluetooth
 
 Wi-Fi request notifications require both the payload's `wifi_bridge.py` and a DKMS rebuild of `linuxhost-wifi` from the updated source. After boot, the latest bridge startup must log `Wi-Fi request delivery: kernel notifications`. An old loaded module remains functional through `compatibility polling`; copying source or restarting Python alone does not activate the kernel change. This needs no additional package, host rebuild or permission. For an existing guest, follow the [Wi-Fi update procedure](DEVELOPMENT.md#updating-wi-fi-request-delivery), including the distinction between the virtual Wi-Fi device and its management NIC.
 
+Wi-Fi radio events separately need the updated `wifi_power.py` and its `wifi_events.py` companion, the existing `python3-gi` dependency and status channel, and the updated frontend. They do not need a new module build. Verify the latest radio-service mode is `Wi-Fi radio host updates: events`; an old frontend works through compatibility refresh. Follow the [radio update and test procedure](DEVELOPMENT.md#updating-wi-fi-radio-synchronization), verifying a wired host route before off/on tests. The scan bridge's kernel-notification mode and the radio service's host-event mode are independent checks.
+
 Check `ldd` on the staged broker before installation: `libavcodec` and `libavutil` must resolve inside the payload's private library directory, with other dependencies provided by the distro. Do not run the broker as a staging test: its normal job is to connect to the host decoder service.
 
 ## Host placement and launch, when requested

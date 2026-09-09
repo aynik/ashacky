@@ -69,6 +69,12 @@
       "owner": "root:root"
     },
     {
+      "source": "guest/devices/wifi_events.py",
+      "target": "/opt/linuxhost-probe/wifi_events.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
       "source": "guest/devices/wifi_power.py",
       "target": "/opt/linuxhost-probe/wifi_power.py",
       "mode": "0644",

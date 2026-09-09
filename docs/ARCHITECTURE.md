@@ -86,7 +86,17 @@ The cfg80211 module wakes the root bridge when Linux requests a scan, connection
 
 Readiness means an unread pending request on that open file descriptor. Successful `GET_SCAN` and `GET_CONNECTION` calls advance its separate observation cursors; they do not complete or consume the shared request. A reopened bridge therefore sees pending work again. Registering the wait before checking state under the wiphy mutex avoids losing a request that arrives between the ioctl and sleep. An observed request does not keep `poll()` spinning while it is completed or expires. Root-only access, sequence validation, credential handling and the independent 45-second scan/90-second connection timeouts are unchanged.
 
-This removes the bridge's idle request checks. Host radio synchronization still runs once per second, and signal strength still refreshes every five seconds; that signal deadline can wake the request wait. Host scan/connect operations remain synchronous and bounded, so a request queued during host I/O waits for that operation to finish. The channel does not accelerate the host's actual scan or association work.
+This removes the bridge's idle request checks. Signal strength still refreshes every five seconds; that deadline can wake the request wait. Radio synchronization uses the separate event path below. Host scan/connect operations remain synchronous and bounded, so a request queued during host I/O waits for that operation to finish. The channel does not accelerate the host's actual scan or association work.
+
+## Wi-Fi radio events
+
+CoreWLAN power and connection callbacks invalidate an opaque `wifiRevision` in the existing status stream. Location authorization and Ashacky's own Wi-Fi mutations also invalidate it. The token contains an app-lifetime identity and a generation, coalesced for 50 ms. Network identities remain in the authorized Wi-Fi RPC. Registration failure or a lost client connection removes the capability; CoreWLAN automatically rearms interrupted registrations, and a subsequent callback restores the token. Permanent invalidation needs an app restart to register again.
+
+The guest radio service reads the kernel's `/dev/rfkill` event stream and watches the atomic host status cache with GIO. Startup synchronizes from the actual host; an initial rfkill value is not a request to change macOS. Host-origin writes are recognized as echoes. A single worker handles bounded RPCs without blocking the event loop, so a newer guest choice survives a delayed older reply. An uncertain power mutation is not retried blindly: the client reads back actual state and preserves any newer request. Inactive sessions cannot submit new mutations, and unchanged status heartbeats cause no radio query.
+
+Missing/stale `wifiRevision` retains a one-second host-status compatibility refresh; Linux radio changes still arrive as events. Failed reads use bounded retries, and a broken rfkill stream exits for systemd recovery. The guest kernel ABI and the existing five-second signal refresh are unchanged. RSSI callback reliability remains a separate acceptance check before removing that refresh.
+
+Apple's [event-registration documentation](https://developer.apple.com/documentation/corewlan/cwwificlient/startmonitoringevent%28with%3A%29) specifies `com.apple.wifi.events`. It is a restricted entitlement: adding it to the reference ad-hoc signed probe caused AMFI to reject the executable. The reference macOS instead delivered power/connection notifications with the existing signing style and no added entitlement. Do not add the restricted entitlement to Ashacky's ad-hoc signature; test runtime event delivery on each intended macOS release and retain the capability fallback where unavailable.
 
 ## Video memory ownership
 

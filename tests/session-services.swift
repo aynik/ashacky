@@ -25,7 +25,7 @@ import Foundation
         // Moving control into the GUI process must retain its authentication
         // and clean-shutdown gates. None of these requests performs an action.
         Control.config = ["token": String(repeating: "x", count: 32), "powerEnabled": false]
-        let message = AshackySessionServices().statusMessage(audioRevision: "test-epoch:1", bluetoothRevision: "test-bt:2")!
+        let message = AshackySessionServices().statusMessage(audioRevision: "test-epoch:1", bluetoothRevision: "test-bt:2", wifiRevision: "test-wifi:3")!
         precondition(message.last == 10 && message.count < 16384)
         let snapshot = try JSONSerialization.jsonObject(with: message) as! [String: Any]
         precondition(snapshot["version"] as? Int == 1)
@@ -33,6 +33,10 @@ import Foundation
         precondition(status["ok"] as? Bool == true)
         precondition(status["audioRevision"] as? String == "test-epoch:1")
         precondition(status["bluetoothRevision"] as? String == "test-bt:2")
+        precondition(status["wifiRevision"] as? String == "test-wifi:3")
+        let legacy = AshackySessionServices().statusMessage(audioRevision: nil, bluetoothRevision: nil, wifiRevision: nil)!
+        let legacyStatus = (try JSONSerialization.jsonObject(with: legacy) as! [String: Any])["status"] as! [String: Any]
+        precondition(legacyStatus["wifiRevision"] == nil)
         precondition(status["token"] == nil && status["powerEnabled"] == nil)
         precondition(!String(decoding: message, as: UTF8.self).contains(Control.config["token"] as! String))
         Control.pending = "poweroff"

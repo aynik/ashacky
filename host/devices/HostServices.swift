@@ -14,6 +14,8 @@ import SystemConfiguration
     @objc public var audioRevision: String? { audioObserver?.revision }
     @objc public var bluetoothChanged: (() -> Void)?
     @objc public var bluetoothRevision: String? { bluetooth.revision }
+    @objc public var wifiChanged: (() -> Void)?
+    @objc public var wifiRevision: String? { wifi.observer.revision }
     var processLock: ServiceProcessLock?
     var server: UnixServer?
     var permissionFlowStarted = false
@@ -35,6 +37,7 @@ import SystemConfiguration
         }
         processLock = try ServiceProcessLock(path: url.appendingPathComponent("host-services.lock").path)
         try wifi.start(directory: url)
+        wifi.observer.changed = { [weak self] in self?.wifiChanged?() }
         try bluetooth.start(directory: url)
         bluetooth.changed = { [weak self] in self?.bluetoothChanged?() }
         try camera.start(directory: url)
@@ -124,6 +127,7 @@ import SystemConfiguration
     }
 
     @objc public func stop() {
+        wifi.observer.stop()
         audioObserver?.stop(); audioObserver = nil
         bluetooth.stop()
         camera.shutdown()
