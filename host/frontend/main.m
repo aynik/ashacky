@@ -80,6 +80,9 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (void)configureDisplays;
 - (GuestView *)activeView;
 @property(nonatomic,strong) CSPort *inputPort;
+@property(nonatomic,strong) CSPort *statusPort;
+@property(nonatomic,strong) NSTimer *statusHeartbeat;
+- (void)sendStatus;
 @property(nonatomic,strong) NSMutableData *inputReply;
 @property(nonatomic) double inputReadyUntil;
 @property(nonatomic) double inputProbeUntil;
@@ -218,6 +221,11 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (void)scrollWheel:(NSEvent *)e { if ([self nativeTouch]) return; [self.input sendMouseScroll:kCSInputScrollSmooth buttonMask:self.buttons dy:-e.scrollingDeltaY/(e.hasPreciseScrollingDeltas?10:1)]; }
 @end
 @implementation App
+- (void)sendStatus {
+ if(!self.statusPort) return;
+ NSData *message=[self.sessionServices statusMessage];
+ if(message) [self.statusPort writeData:message];
+}
 - (void)setHostCursorHidden:(BOOL)hidden {
  if (hidden == self.hostCursorHidden) return;
  _hostCursorHidden=hidden;
@@ -272,6 +280,11 @@ static CSConnection *displayConnection(NSURL *socketURL) {
   NSLog(@"Ashacky session services failed: %@",serviceError.localizedDescription);
   exit(EXIT_FAILURE);
  }
+ __weak App *weakSelf=self;
+ self.sessionServices.statusChanged=^{ [weakSelf sendStatus]; };
+ // Events carry changes immediately; a heartbeat maintains the guest watchdog
+ // and recovers the initial snapshot after a display/port reconnect.
+ self.statusHeartbeat=[NSTimer scheduledTimerWithTimeInterval:10 repeats:YES block:^(NSTimer *timer) { [weakSelf sendStatus]; }];
  self.borderless=YES;
  self.slots=[NSMutableArray array];self.displays=[NSMutableDictionary dictionary];
  NSScreen *screen=NSScreen.screens.firstObject;
@@ -394,7 +407,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (void)windowDidResize:(NSNotification *)n { [self resizeDisplay]; }
 - (void)windowDidResignKey:(NSNotification *)n { [self setHostCursorHidden:NO]; for(DisplaySlot *slot in self.slots) if(slot.window==n.object) [slot.view releaseGuestKeys]; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
-- (void)applicationWillTerminate:(NSNotification *)n { [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.sessionServices stop]; [self.hostServices stop]; }
+- (void)applicationWillTerminate:(NSNotification *)n { [self.statusHeartbeat invalidate];self.statusPort=nil; [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.sessionServices stop]; [self.hostServices stop]; }
 - (void)spiceConnected:(CSConnection *)c { dispatch_async(dispatch_get_main_queue(), ^{ NSLog(@"SPICE connected");
  c.usbManager.isAutoConnect=NO;
  }); }
@@ -414,6 +427,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (void)spiceAgentDisconnected:(CSConnection *)c { dispatch_async(dispatch_get_main_queue(), ^{}); }
 - (void)spiceForwardedPortOpened:(CSConnection *)c port:(CSPort *)p { dispatch_async(dispatch_get_main_queue(), ^{
  if ([p.name isEqualToString:@"org.linuxhost.input"]) { NSLog(@"Touch port opened");self.inputPort=p;self.inputReply=[NSMutableData data];p.delegate=self; }
+ if ([p.name isEqualToString:@"org.ashacky.status"]) { NSLog(@"Host status port opened");self.statusPort=p;p.delegate=self;[self sendStatus]; }
 }); }
 - (void)port:(CSPort *)port didRecieveData:(NSData *)data { dispatch_async(dispatch_get_main_queue(), ^{
  if(port!=self.inputPort) return;
@@ -424,9 +438,9 @@ static CSConnection *displayConnection(NSURL *socketURL) {
  if([reply containsString:@"LH_INPUT_READY\n"]) { self.inputReadyUntil=NSProcessInfo.processInfo.systemUptime+3;[self.inputReply setLength:0]; }
  if(self.inputReply.length>256) [self.inputReply setLength:0];
 }); }
-- (void)portDidDisconect:(CSPort *)port { dispatch_async(dispatch_get_main_queue(), ^{if(port!=self.inputPort)return;self.inputReadyUntil=0;self.inputAppliedUntil=0;for(DisplaySlot *slot in self.slots) [slot.view resetTouches];self.inputPort=nil;}); }
-- (void)port:(CSPort *)port didError:(NSString *)error { NSLog(@"Input port error: %@",error);[self portDidDisconect:port]; }
-- (void)spiceForwardedPortClosed:(CSConnection *)c port:(CSPort *)p { dispatch_async(dispatch_get_main_queue(), ^{}); }
+- (void)portDidDisconect:(CSPort *)port { dispatch_async(dispatch_get_main_queue(), ^{if(port==self.statusPort)self.statusPort=nil;if(port!=self.inputPort)return;self.inputReadyUntil=0;self.inputAppliedUntil=0;for(DisplaySlot *slot in self.slots) [slot.view resetTouches];self.inputPort=nil;}); }
+- (void)port:(CSPort *)port didError:(NSString *)error { NSLog(@"SPICE port error: %@",error);[self portDidDisconect:port]; }
+- (void)spiceForwardedPortClosed:(CSConnection *)c port:(CSPort *)p { [self portDidDisconect:p]; }
 @end
 int main(int argc,const char **argv) {
  if(argc==2 && strcmp(argv[1],"--check-session-transitions")==0) {

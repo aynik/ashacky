@@ -34,6 +34,12 @@ For instruction/build reviews, use isolated output directories and inspect the w
 
 Fresh-account installation requires an explicit setup request. Missing acceptance results are limitations to record, not authorization to deploy. A second macOS account alone does not isolate system helpers or physical devices. When that test is requested, establish distinct helper identities and device/network isolation first. The reference migration and retirement are recorded in VALIDATION.md; another installation must make its own acceptance checks and preserve its VM and data.
 
+### Updating battery telemetry
+
+Install the updated `linuxhost-agent` and battery `feed.py` at their existing manifest paths, preserving root ownership and recording installed hashes. Restart their two guest units. They remain compatible with an older host through the status RPC fallback. Build and assemble the updated frontend, then replace the app during a clean session stop. Restart QEMU with the updated supervisor arguments to add `org.ashacky.status`; rebuilding the app alone cannot add a port to an already running VM. No battery module rebuild, credential change or privacy prompt is required.
+
+Verify `/run/linuxhost/status.json` reports `statusTransport: virtio-serial`. Disconnect/reconnect power and observe UPower, then restart the guest agent to check reconnection. The cache should keep refreshing at least every ten seconds while idle. Record the observed latency; build checks alone do not establish live charger behavior.
+
 ### Updating an installation with standalone session helpers
 
 The frontend now contains host control and lock synchronization. Updating only the app leaves an old power helper authorizing the removed `LinuxHostControl` executable, so coordinated power actions will fail. During a scheduled clean stop:

@@ -39,6 +39,8 @@ def arguments(c, network_fds):
             '-device',f'usb-redir,chardev=usbredir{index},id=usbredir{index},bus=usb-controller-0.0,port={index+1}']
     a+=['-chardev','spiceport,id=lhinput,name=org.linuxhost.input',
         '-device','virtserialport,chardev=lhinput,name=org.linuxhost.input']
+    a+=['-chardev','spiceport,id=ashacky-status,name=org.ashacky.status',
+        '-device','virtserialport,chardev=ashacky-status,name=org.ashacky.status']
     a+=['-object',f'memory-backend-file,id=video-frames,size=64M,mem-path={runtime}/video-frames.bin,share=on','-device','linuxhost-shmem,memdev=video-frames,addr=0xb']
     if c.get('provisioningISO'):
         a+=['-drive',f'if=none,id=ashacky-seed,format=raw,media=cdrom,readonly=on,file={c["provisioningISO"]}',

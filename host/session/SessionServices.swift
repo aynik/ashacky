@@ -35,6 +35,14 @@ final class SessionCommands {
 @objc(AshackySessionServices) public final class AshackySessionServices: NSObject {
     private let commands = SessionCommands()
     private var bridge: Bridge?
+    @objc public var statusChanged: (() -> Void)?
+
+    /// Read-only telemetry; power/authentication requests still use authenticated RPC.
+    @objc public func statusMessage() -> Data? {
+        var data = try? JSONSerialization.data(withJSONObject: ["version": 1, "status": Control.status()])
+        data?.append(10)
+        return data
+    }
 
     @objc public func start() throws {
         let ssh = ProcessInfo.processInfo.environment["ASHACKY_GUEST_SSH"] ?? ""
@@ -42,6 +50,7 @@ final class SessionCommands {
             throw IPCError.message("ASHACKY_GUEST_SSH must select this installation's guest SSH wrapper")
         }
         try Control.start(commands: commands)
+        Control.statusChanged = { [weak self] in self?.statusChanged?() }
         let sync = Bridge(guestSSH: ssh, commands: commands)
         bridge = sync
         sync.start()

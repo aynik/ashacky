@@ -65,10 +65,15 @@ def inspect_bundle(app):
 
 
 def main():
-    argparse.ArgumentParser(description=__doc__).parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--app', type=Path, default=BUILD / 'host/Ashacky.app',
+                        help='frontend bundle inside build/ to assemble; does not select the installed app')
+    args = parser.parse_args()
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         raise RuntimeError('Assemble on Apple Silicon macOS')
-    app = BUILD / 'host/Ashacky.app'
+    app = args.app.absolute()
+    if not app.resolve().is_relative_to(BUILD.resolve()) or app.name != 'Ashacky.app':
+        raise RuntimeError('Assemble an Ashacky.app inside this checkout\'s build directory')
     opened = subprocess.run(['/usr/sbin/lsof', '-t', '+D', str(app)], capture_output=True, text=True)
     if opened.stdout.strip() or app.is_symlink():
         raise RuntimeError('Refusing to replace a running or redirected build bundle')

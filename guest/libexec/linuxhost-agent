@@ -4,6 +4,7 @@ import json
 import hmac
 import os
 import pathlib
+import select
 import socket
 import struct
 import subprocess
@@ -12,6 +13,7 @@ import time
 
 CONFIG = pathlib.Path('/etc/linuxhost.json')
 RUNTIME = pathlib.Path('/run/linuxhost')
+STATUS_PORT = pathlib.Path('/dev/virtio-ports/org.ashacky.status')
 ALLOWED = {'status', 'powercheck', 'sleep', 'poweroff', 'restart', 'logout', 'authenticate'}
 
 def host_request(request):
@@ -25,20 +27,70 @@ def host_request(request):
         result = client.makefile('rb').readline(16384)
         return json.loads(result)
 
+def status_stream(port=STATUS_PORT):
+    """Bounded, read-only host telemetry; this channel never accepts commands."""
+    fd = os.open(port, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        buffer = b''
+        while True:
+            if not select.select([fd], [], [], 25)[0]:
+                raise TimeoutError('Host status heartbeat expired')
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                raise EOFError('Host status port disconnected')
+            buffer += chunk
+            while b'\n' in buffer:
+                line, buffer = buffer.split(b'\n', 1)
+                if len(line) > 16384:
+                    raise ValueError('Host status message too large')
+                message = json.loads(line)
+                if not isinstance(message, dict) or type(message.get('version')) is not int or message['version'] != 1:
+                    raise ValueError('Unsupported host status protocol')
+                status = message.get('status')
+                if not isinstance(status, dict) or status.get('ok') is not True:
+                    raise ValueError('Invalid host status')
+                yield status
+            if len(buffer) > 16384:
+                raise ValueError('Host status message too large')
+    finally:
+        os.close(fd)
+
+
+def save_status(status, transport, generation):
+    if not isinstance(status, dict) or status.get('ok') is not True:
+        raise ValueError('Host status unavailable')
+    new_generation = status.get('wakeGeneration')
+    temporary = RUNTIME / 'status.tmp'
+    temporary.write_text(json.dumps(dict(status, statusTransport=transport)))
+    temporary.chmod(0o644)
+    temporary.replace(RUNTIME / 'status.json')
+    if generation is not None and new_generation != generation:
+        # Publish power telemetry first; a clock-service restart must not hold it up.
+        try:
+            subprocess.run(['systemctl', 'try-restart', 'systemd-timesyncd.service', '--no-block'],
+                           timeout=10, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            print('Clock refresh:', error, flush=True)
+    return new_generation
+
+
 def refresh_status():
-    generation = None
+    generation, mode = None, None
     while True:
         try:
-            status = host_request({'action': 'status'})
-            new_generation = status.get('wakeGeneration')
-            if generation is not None and new_generation != generation:
-                # Host sleep suspends execution; refresh guest time and network after wake.
-                subprocess.run(['systemctl', 'try-restart', 'systemd-timesyncd.service'], timeout=10, check=False)
-            generation = new_generation
-            temporary = RUNTIME / 'status.tmp'
-            temporary.write_text(json.dumps(status))
-            temporary.chmod(0o644)
-            temporary.replace(RUNTIME / 'status.json')
+            for status in status_stream():
+                if mode != 'virtio-serial':
+                    print('Host status: event channel connected', flush=True)
+                    mode = 'virtio-serial'
+                generation = save_status(status, mode, generation)
+        except (OSError, EOFError, ValueError):
+            # Older VM configurations have no status port. Retain their RPC
+            # path, and also recover telemetry while the frontend reconnects.
+            if mode != 'rpc-poll':
+                print('Host status: using compatibility RPC polling', flush=True)
+                mode = 'rpc-poll'
+        try:
+            generation = save_status(host_request({'action': 'status'}), mode, generation)
         except Exception as error:
             print('Status refresh:', error, flush=True)
         time.sleep(5)

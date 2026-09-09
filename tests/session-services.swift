@@ -25,6 +25,14 @@ import Foundation
         // Moving control into the GUI process must retain its authentication
         // and clean-shutdown gates. None of these requests performs an action.
         Control.config = ["token": String(repeating: "x", count: 32), "powerEnabled": false]
+        let message = AshackySessionServices().statusMessage()!
+        precondition(message.last == 10 && message.count < 16384)
+        let snapshot = try JSONSerialization.jsonObject(with: message) as! [String: Any]
+        precondition(snapshot["version"] as? Int == 1)
+        let status = snapshot["status"] as! [String: Any]
+        precondition(status["ok"] as? Bool == true)
+        precondition(status["token"] == nil && status["powerEnabled"] == nil)
+        precondition(!String(decoding: message, as: UTF8.self).contains(Control.config["token"] as! String))
         Control.pending = "poweroff"
         Control.deadline = Date().addingTimeInterval(60)
         Control.handle(["action": "vm-stopped", "token": "wrong", "clean": true]) {

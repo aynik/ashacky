@@ -20,6 +20,7 @@ flowchart TB
   Guest <-->|private SSH / Unix socket forwards| Frontend
   Guest <-->|control requests| Control
   Control --> Power[Restricted root power helper]
+  Control -->|power notifications / heartbeat| Telemetry[virtio-serial status → guest cache → power_supply]
   Sync <-->|fixed guest session operations| Guest
   Guest <-->|usbredir| USB[Restricted root USB helper]
   Guest --> VA[VA-API driver / decoder broker]
@@ -42,7 +43,7 @@ SPICE handles display, cursor, keyboard, audio, clipboard and guest display chan
 | Webcam | v4l2loopback | Host camera capture runs on guest demand. Depends on macOS camera authorization. |
 | Trackpad | Type-B multitouch uinput device | NSTouch frames travel through a SPICE port. Readiness and timeout behavior preserve normal pointer fallback. |
 | USB | USB redirection | Active-account storage-only autoattach. Four explicit root ports are essential to the validated hotplug fix. Host input/radio devices are excluded. |
-| Battery | Linux power_supply → UPower | Host telemetry feeds a small virtual battery driver; stale data expires. |
+| Battery | Linux power_supply → UPower | Native macOS power notifications push telemetry through virtio-serial; inotify updates the virtual battery. A heartbeat maintains freshness; stale data expires. |
 | Touch ID | PAM authentication | macOS LocalAuthentication performs authentication. Enrollment stays on macOS. Linux password fallback remains available. |
 | Graphics | virtio GPU, VirGL/Venus | Host ANGLE/Metal and Vulkan/MoltenVK stack. Stock guest Mesa; no custom Firefox build. |
 | Video | General VA-API driver | VP9 through VideoToolbox/shared memory; H.264 through the pinned remote FFmpeg decoder. Codec and performance limits are in STATUS.md. |
@@ -50,6 +51,10 @@ SPICE handles display, cursor, keyboard, audio, clipboard and guest display chan
 Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. There is no custom permission window. The application requests undecided permissions through the native macOS prompts, one at a time; granted or denied access is not re-prompted. An explicit `--setup PRIVATE_DIRECTORY` mode can request these permissions before the first VM boot. A normal app open starts the installed session job. Socket names retain their existing protocol compatibility names.
 
 ## Session and privilege boundaries
+
+Power-source changes use `IOPSNotificationCreateRunLoopSource`. The frontend sends newline-delimited JSON snapshots (`version: 1`, `status: {...}`) over `org.ashacky.status`, a read-only SPICE/virtio-serial channel. Sleep/wake and session activity also trigger snapshots; a ten-second heartbeat refreshes the existing battery watchdog. The guest agent validates messages, atomically replaces its status cache, and the battery feeder watches that directory with inotify before writing the existing sysfs interface. The kernel emits `power_supply_changed()` for UPower. No new guest kernel ABI or desktop extension is needed.
+
+The event channel carries no credentials and accepts no power or authentication commands. Older QEMU configurations, missing channels and expired heartbeats fall back to the authenticated five-second status RPC. This fallback can still delay charger updates. Audio and Bluetooth management retain their existing one- and two-second refresh loops respectively.
 
 Host device services, frontend, session supervisor, Touch ID and lock observation run as the dedicated user. Only the network, USB and narrowly scoped power operations require root installation. Those executables and their loaded dependencies must reside in administrator-controlled locations; never point a root LaunchDaemon at mutable checkout scripts.
 

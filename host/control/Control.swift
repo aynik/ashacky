@@ -20,6 +20,8 @@ enum Control {
     static var processLock: ServiceProcessLock?
     static var timer: Timer?
     static var commands: SessionCommands!
+    static var statusChanged: (() -> Void)?
+    static var powerObserver: PowerObserver?
     static var enabled: Bool { config["powerEnabled"] as? Bool == true }
     static func active() -> Bool {
         var uid: uid_t = 0
@@ -50,21 +52,22 @@ enum Control {
         _ = semaphore.wait(timeout:.now()+80)
         return answer
     }
+    static func status() -> [String:Any] {
+        var result: [String:Any] = ["ok":true,"active":active(),"wakeGeneration":wake,"sleeping":sleeping,"pendingPower":pending ?? "none","backend":"qemu-spice","bundleID":Bundle.main.bundleIdentifier ?? ""]
+        if let info=IOPSCopyPowerSourcesInfo()?.takeRetainedValue(), let sources=IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] {
+            for source in sources {
+                if let battery=IOPSGetPowerSourceDescription(info,source)?.takeUnretainedValue() as? [String:Any] {
+                    let keys=["Current Capacity","Max Capacity","Is Charging","Power Source State"]
+                    result["battery"]=battery.filter { keys.contains($0.key) }; break
+                }
+            }
+        }
+        return result
+    }
     static func handle(_ value: [String:Any], reply: @escaping ([String:Any])->Void) {
         guard value["token"] as? String == config["token"] as? String else { reply(["ok":false,"error":"Invalid session token"]); return }
         let action=value["action"] as? String ?? ""
-        if action=="status" {
-            var result: [String:Any] = ["ok":true,"active":active(),"wakeGeneration":wake,"sleeping":sleeping,"pendingPower":pending ?? "none","backend":"qemu-spice","bundleID":Bundle.main.bundleIdentifier ?? ""]
-            if let info=IOPSCopyPowerSourcesInfo()?.takeRetainedValue(), let sources=IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] {
-                for source in sources {
-                    if let battery=IOPSGetPowerSourceDescription(info,source)?.takeUnretainedValue() as? [String:Any] {
-                        let keys=["Current Capacity","Max Capacity","Is Charging","Power Source State"]
-                        result["battery"]=battery.filter { keys.contains($0.key) }; break
-                    }
-                }
-            }
-            reply(result); return
-        }
+        if action=="status" { reply(status()); return }
         guard active() else { pending=nil; reply(["ok":false,"error":"The Linux macOS session is not active"]); return }
         switch action {
         case "powercheck": reply(power("check",operation:"poweroff"))
@@ -135,14 +138,19 @@ enum Control {
             return request(value)
         }
         let center=NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;ssh(["loginctl","lock-sessions"]) })
-        observers.append(center.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { _ in sleeping=false;wake+=1 })
-        observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;ssh(["loginctl","lock-sessions"]) })
+        observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;statusChanged?();ssh(["loginctl","lock-sessions"]) })
+        observers.append(center.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { _ in sleeping=false;wake+=1;statusChanged?() })
+        observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;statusChanged?();ssh(["loginctl","lock-sessions"]) })
+        observers.append(center.addObserver(forName:NSWorkspace.sessionDidBecomeActiveNotification,object:nil,queue:.main) { _ in statusChanged?() })
+        powerObserver=PowerObserver { statusChanged?() }
+        if powerObserver == nil { NSLog("Power notifications unavailable; status heartbeat remains active") }
         timer=Timer.scheduledTimer(withTimeInterval:2,repeats:true) { _ in if pending != nil && Date()>deadline { pending=nil } }
         NSLog("Ashacky control ready")
     }
     static func stop() {
         pending=nil
+        statusChanged=nil
+        powerObserver?.stop();powerObserver=nil
         timer?.invalidate(); timer=nil
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         observers.removeAll()

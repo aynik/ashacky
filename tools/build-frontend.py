@@ -41,9 +41,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compile-shaders', action='store_true',
                         help='optional source shader build; requires the Metal compiler')
+    parser.add_argument('--output', type=Path, default=ROOT / 'build/host',
+                        help='build directory inside build/; use a temporary directory to validate while the installed app runs')
     args = parser.parse_args()
     if platform.system() != 'Darwin':
         raise RuntimeError('The frontend must be built on macOS')
+    output = args.output.absolute()
+    if output.is_symlink() or not output.resolve().is_relative_to((ROOT / 'build').resolve()):
+        raise RuntimeError('Frontend output must stay inside this checkout\'s build directory')
     if args.compile_shaders:
         run(['xcrun', '--find', 'metal'])
         run(['xcrun', '--find', 'metallib'])
@@ -54,7 +59,6 @@ def main():
     if not args.compile_shaders:
         assets.verify_shader_sources(sources)
         upstream = assets.prepare()
-    output = ROOT / 'build/host'
     objects = output / 'frontend-objects'
     objects.mkdir(parents=True, exist_ok=True)
     contents = output / 'Ashacky.app/Contents'
@@ -98,7 +102,7 @@ def main():
     host_sources = [ROOT / 'host/common/IPC.swift', *[ROOT / 'host/devices' / name for name in
         ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
          'CameraService.swift', 'HostServices.swift')]]
-    host_sources += [ROOT / name for name in ('host/control/Control.swift',
+    host_sources += [ROOT / name for name in ('host/control/Control.swift', 'host/control/PowerObserver.swift',
         'host/session/SessionSync.swift', 'host/session/SessionServices.swift')]
     host_object = objects / 'host-services.o'
     run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O', '-whole-module-optimization',

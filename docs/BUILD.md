@@ -193,6 +193,16 @@ The graphics submodule pins follow `third_party/utm/patches/sources` and remain 
 
 ## Frontend and bundle assembly
 
+For a non-disruptive frontend review with the dependencies already built, use a temporary output inside `build/`. Set the same `PATH` and `PKG_CONFIG_PATH` shown below before running:
+
+```sh
+python3 tools/build-frontend.py --output build/frontend-review
+python3 tools/assemble-runtime.py --app build/frontend-review/Ashacky.app
+python3 tools/check-runtime.py --app build/frontend-review/Ashacky.app
+```
+
+This does not select or launch a runtime. Keep the installed app at its existing canonical path. Remove temporary review outputs after validation or a coordinated clean-stop replacement; they are not a version store. Without these options, the normal output remains `build/host/Ashacky.app`.
+
 The `frontend` stage selects the private dependency prefix automatically. For a manual component build, use the same environment and run:
 
 ```sh

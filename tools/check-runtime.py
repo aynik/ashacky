@@ -48,7 +48,7 @@ def main():
                 raise RuntimeError('Obsolete standalone session helper: ' + obsolete)
         session_check = temporary / 'session-service-checks'
         subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
-            *[str(ROOT / name) for name in ('host/common/IPC.swift', 'host/control/Control.swift',
+            *[str(ROOT / name) for name in ('host/common/IPC.swift', 'host/control/Control.swift', 'host/control/PowerObserver.swift',
                 'host/session/SessionSync.swift', 'host/session/SessionServices.swift', 'tests/session-services.swift')],
             '-o', str(session_check)], check=True)
         subprocess.run([str(session_check)], check=True, timeout=10)

@@ -53,6 +53,8 @@ class ConfigurationTests(unittest.TestCase):
             for index, value in enumerate(redirs, 1):
                 self.assertTrue(value.endswith(f'bus=usb-controller-0.0,port={index}'))
             self.assertIn('hvf,ipa-granule-size=0x1000', args)
+            self.assertIn('spiceport,id=ashacky-status,name=org.ashacky.status', args)
+            self.assertIn('virtserialport,chardev=ashacky-status,name=org.ashacky.status', args)
             self.assertTrue(any('venus=true,neptune=true' in value for value in args))
             seeded = session.arguments(dict(config, provisioningISO=temp + '/seed.iso'), [5, 6])
             self.assertTrue(any('media=cdrom,readonly=on,file=' in value for value in seeded))
