@@ -77,6 +77,7 @@ def main():
         'vaTarget': 'ashacky_drv_video.so',
         'dkmsPackages': ['linuxhost-wifi', 'linuxhost-bt-radio', 'linuxhost-battery'],
         'systemServices': [p.name for p in (ROOT / 'guest/systemd/system').glob('*.service')],
+        'optionalSystemServices': {'ashacky-fido2.service': 'Disabled until host FIDO2 and attended acceptance are enabled; see docs/FIDO2.md'},
         'userServices': ['linuxhost-audio-pipewire.service', 'linuxhost-video-direct.socket']}
     manifest = []
     for path in sorted(output.rglob('*')):

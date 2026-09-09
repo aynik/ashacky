@@ -3,6 +3,7 @@ import Foundation
 @main enum SessionServiceChecks {
     static func main() throws {
         checkControlChannel()
+        try checkFIDO2Storage()
 
         // Moving control into the GUI process must retain its authentication
         // and clean-shutdown gates. None of these requests performs an action.

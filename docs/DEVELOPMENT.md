@@ -1,5 +1,7 @@
 # One checkout, one current build
 
+For optional virtual FIDO2 updates, see [the matched host/guest activation and rollback procedure](FIDO2.md#attended-activation). Preserve its private host credential store and installation token; neither belongs in Git or generated guest payloads.
+
 Ashacky keeps source in one checkout and generated dependencies, objects and coherent app bundles under its ignored `build/` directory. Git provides source history. There is no installed version store or active-version selector.
 
 Use symlinks only where an OS integration point needs a path elsewhere. Root helpers and their dependencies must be installed into administrator-controlled locations. Guest kernel, PAM and VA libraries must be installed for the guest's ABI; a macOS symlink cannot install them into another OS. Generate these installed outputs from the checkout, record them and never maintain separate edited source copies.

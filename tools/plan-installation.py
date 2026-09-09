@@ -73,7 +73,8 @@ def generate(c, destination):
     owner = c['hostUser'] + ':' + c['group']
     env = {'LINUXHOST_CONTROL_CONFIG': str(base / 'control.json')}
     control = {'socket': str(base / 'runtime/host.sock'), 'token': token,
-               'powerEnabled': False, 'powerSocket': str(runtime / 'power/power.sock')}
+               'powerEnabled': False, 'fido2Enabled': False,
+               'powerSocket': str(runtime / 'power/power.sock')}
     vm = {'userID': uid, 'uuid': identity, 'diskSerial': 'ashacky-' + secrets.token_hex(8),
           'name': 'Ashacky', 'cpus': c['cpus'], 'memory': c['memoryMiB'],
           'appContents': str(app), 'runtime': str(base / 'runtime'), 'control': str(base / 'control.json'),

@@ -1,5 +1,7 @@
 # Prepare an installation for review
 
+The optional FIDO2 service is staged separately from normal service activation and defaults to disabled in the host plan. Follow [FIDO2.md](FIDO2.md#attended-activation) for its native Touch ID/password and browser acceptance; it does not replace the PAM/keyring steps below.
+
 This document gives the concrete account and Debian/GNOME recipe for an owner-requested installation. For an instruction or build review, limit work to generation, compilation, isolated staging and read-only checks. Do not change a working account or guest merely to validate the recipe.
 
 ## Generate matching identities and service files

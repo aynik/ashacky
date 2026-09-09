@@ -1,0 +1,4 @@
+# Only this virtual authenticator is offered to the active local desktop user.
+# /dev/uhid and the control socket remain root-only. Do not widen all hidraw nodes.
+SUBSYSTEM=="hidraw", IMPORT{parent}="HID_*"
+SUBSYSTEM=="hidraw", ENV{HID_NAME}=="Ashacky FIDO2", ENV{HID_UNIQ}=="org.ashacky.fido2", OWNER="root", GROUP="root", MODE="0600", TAG+="uaccess"

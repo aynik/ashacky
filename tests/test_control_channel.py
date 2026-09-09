@@ -102,6 +102,24 @@ class ControlTests(unittest.TestCase):
         self.receive(type='response', id=1, payload={'ok': True})
         self.assertEqual(peer.recv(4096), b'')
 
+    def test_fido_cancellation_can_pass_while_authentication_waits(self):
+        self.welcome()
+        pending, first = self.client('fido2')
+        cancellation, second = self.client('fido2')
+        first.sendall(b'{"action":"request","id":"fixture"}\n')
+        self.broker.step(); self.broker.step()
+        message = json.loads(self.host.recv(65536))
+        self.assertEqual(message['service'], 'fido2')
+        self.assertGreater(self.broker.clients[pending]['deadline'] - time.monotonic(), 75)
+        second.sendall(b'{"action":"cancel","id":"fixture"}\n')
+        self.broker.step(); self.broker.step()
+        message = json.loads(self.host.recv(65536))
+        self.assertEqual(message['payload']['action'], 'cancel')
+        self.receive(type='response', id=2, payload={'ok': True})
+        self.broker.step()
+        self.assertTrue(json.loads(second.recv(4096))['ok'])
+        self.assertIn(pending, self.broker.clients)
+
     def test_handshake_and_backpressure_deadlines(self):
         self.broker.hello_deadline = time.monotonic() - 1
         with self.assertRaises(TimeoutError):
@@ -125,10 +143,11 @@ class ControlTests(unittest.TestCase):
     @unittest.skipIf(os.geteuid() == 0, 'This case verifies rejection of an unprivileged peer')
     def test_private_sockets_reject_nonroot_even_if_directory_accessible(self):
         self.broker.listen()
-        with socket.socket(socket.AF_UNIX) as client:
-            client.connect(str(Path(self.temp.name) / 'host.sock'))
-            self.broker.step()
-            self.assertEqual(client.recv(4096), b'')
+        for name in ('host', 'fido2'):
+            with socket.socket(socket.AF_UNIX) as client:
+                client.connect(str(Path(self.temp.name) / (name + '.sock')))
+                self.broker.step()
+                self.assertEqual(client.recv(4096), b'')
         self.assertFalse(self.broker.clients)
 
     def test_port_eof_and_payload_do_not_enter_public_status(self):

@@ -3,11 +3,12 @@ import AppKit
 /// Session services share Ashacky's main run loop and macOS application identity.
 @objc(AshackySessionServices) public final class AshackySessionServices: NSObject {
     private var channel: ControlChannel?
+    private var fido2: FIDO2Service?
     @objc public var controlWrite: ((Data, @escaping (Bool) -> Void) -> Void)?
     @objc public var controlFailed: (() -> Void)?
 
-    @objc public func controlOpened() { channel?.close() }
-    @objc public func controlClosed() { channel?.close() }
+    @objc public func controlOpened() { fido2?.cancelAll(); channel?.close() }
+    @objc public func controlClosed() { fido2?.cancelAll(); channel?.close() }
     @objc public func controlReceived(_ data: Data) { channel?.receive(data) }
     @objc public var statusChanged: (() -> Void)?
 
@@ -33,13 +34,22 @@ import AppKit
             guard let write = self?.controlWrite else { completion(false); return }
             write(data, completion)
         }
-        control.failed = { [weak self] in self?.controlFailed?() }
+        control.failed = { [weak self] in self?.fido2?.cancelAll(); self?.controlFailed?() }
         let directory = URL(fileURLWithPath: Control.config["socket"] as! String).deletingLastPathComponent().deletingLastPathComponent()
+        if Control.config["fido2Enabled"] as? Bool == true {
+            do { fido2 = try FIDO2Service(directory: directory, namespace: Control.config["token"] as! String) }
+            catch { NSLog("FIDO2 unavailable; credential storage could not be opened") }
+        }
         let endpoints = ["host": Control.config["socket"] as! String,
                          "wifi": directory.appendingPathComponent("wifi-workbench.sock").path,
                          "bluetooth": directory.appendingPathComponent("bluetooth-workbench.sock").path,
                          "camera": directory.appendingPathComponent("camera-workbench.sock").path]
-        control.request = { service, payload, completion in
+        control.request = { [weak self] service, payload, completion in
+            if service == "fido2" {
+                guard let fido2 = self?.fido2 else { completion(["ok": false, "error": "FIDO2 disabled"]); return }
+                fido2.request(payload, reply: completion)
+                return
+            }
             guard let endpoint = endpoints[service] else { completion(["ok": false]); return }
             // Existing listeners retain their token, active-console and request
             // validation. Never call their blocking adapters on the main queue.
@@ -52,6 +62,7 @@ import AppKit
     }
 
     @objc public func stop() {
+        fido2?.cancelAll(); fido2 = nil
         channel?.close()
         channel = nil
         Control.stop()

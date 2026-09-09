@@ -103,7 +103,8 @@ def main():
         ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
          'CameraBuffer.swift', 'CameraService.swift', 'HostServices.swift')]]
     host_sources += [ROOT / name for name in ('host/control/Control.swift', 'host/control/PowerObserver.swift',
-        'host/session/ControlChannel.swift', 'host/session/SessionServices.swift')]
+        'host/session/ControlChannel.swift', 'host/session/SessionServices.swift',
+        'host/auth/CBOR.swift', 'host/auth/FIDO2.swift', 'host/auth/FIDO2Service.swift')]
     host_object = objects / 'host-services.o'
     run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O', '-whole-module-optimization',
          '-module-name', 'AshackyHost', '-emit-object', '-emit-objc-header',
@@ -121,7 +122,7 @@ def main():
     libraries = pkg('--libs')
     for framework in ('Cocoa', 'Metal', 'MetalKit', 'CoreGraphics', 'IOSurface', 'AVFoundation', 'AudioToolbox',
                       'CoreLocation', 'CoreWLAN', 'CoreBluetooth', 'IOBluetooth', 'SystemConfiguration', 'CoreAudio',
-                      'LocalAuthentication', 'IOKit', 'CoreServices'):
+                      'LocalAuthentication', 'IOKit', 'CoreServices', 'Security', 'CryptoKit'):
         libraries += ['-framework', framework]
     # Swift's linker driver includes the Swift runtime required by the services.
     link_flags = []

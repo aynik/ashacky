@@ -18,6 +18,8 @@ The agent's workflow is in [INSTALL.md](docs/INSTALL.md), with concrete configur
 
 Video integration is the general VA-API driver and decoder service. Browser-specific launchers, preload helpers and settings are excluded; sandboxed-browser acceleration is not guaranteed.
 
+An optional [virtual FIDO2 prototype](docs/FIDO2.md) connects Linux passkey clients to Secure Enclave signing with native Touch ID/Mac password authorization. It is disabled by default. The reference Firefox registration, sign-in and Mac password-fallback checks pass; remaining native/restart acceptance is tracked in the guide. It does not unlock GNOME Keyring.
+
 Full Xcode is not a setup requirement. Ashacky compiles its host code with Command Line Tools and fetches pinned graphics frameworks and shaders from a checksummed UTM release. UTM is used as a download source; its app is not installed or launched.
 
 ## One checkout

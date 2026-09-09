@@ -68,7 +68,7 @@ class Broker:
         info = self.runtime.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise PermissionError('Control runtime must be private')
-        for service in ('host', 'wifi', 'bluetooth', 'camera'):
+        for service in ('host', 'wifi', 'bluetooth', 'camera', 'fido2'):
             path = self.runtime / (service + '.sock')
             path.unlink(missing_ok=True)
             listener = socket.socket(socket.AF_UNIX)
@@ -123,7 +123,7 @@ class Broker:
                 return
             self.counter += 1
             record['id'] = self.counter
-            record['deadline'] = time.monotonic() + (80 if record['service'] == 'host' else 20)
+            record['deadline'] = time.monotonic() + (80 if record['service'] in ('host', 'fido2') else 20)
             self.pending[self.counter] = client
             self.send({'type': 'request', 'id': self.counter, 'service': record['service'], 'payload': value})
 

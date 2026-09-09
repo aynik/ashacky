@@ -40,7 +40,8 @@
       "submodule": "third_party/spice-gtk",
       "patches": [
         "third_party/utm/patches/spice-gtk-0.42.patch",
-        "patches/spice-gtk-release-version.patch"
+        "patches/spice-gtk-release-version.patch",
+        "patches/spice-gtk-display-ack.patch"
       ]
     },
     "cocoaspice": {

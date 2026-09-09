@@ -20,6 +20,8 @@ spec.loader.exec_module(assembly)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', type=Path, default=ROOT / 'build/host/Ashacky.app')
+    parser.add_argument('--spice-build', type=Path, default=ROOT / 'build/runtime/spice-gtk',
+                        help='Matching configured SPICE client build for its transport fixture')
     args = parser.parse_args()
     if platform.system() != 'Darwin':
         raise RuntimeError('Check the runtime on macOS')
@@ -43,13 +45,17 @@ def main():
         print(run('qemu-system-aarch64', '--version').splitlines()[0])
         print(run('qemu-img', '--version').splitlines()[0])
         print(run('Ashacky', '--check-display-transport').strip())
+        subprocess.run([sys.executable, str(ROOT / 'tools/check-spice-client.py'),
+            '--app', str(app), '--spice-build', str(args.spice_build)], check=True, timeout=30)
         for obsolete in ('LinuxHostControl', 'SessionSync'):
             if (contents / 'MacOS' / obsolete).exists():
                 raise RuntimeError('Obsolete standalone session helper: ' + obsolete)
         session_check = temporary / 'session-service-checks'
         subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
             *[str(ROOT / name) for name in ('host/common/IPC.swift', 'host/control/Control.swift', 'host/control/PowerObserver.swift',
-                'host/session/ControlChannel.swift', 'host/session/SessionServices.swift', 'tests/control-channel.swift', 'tests/session-services.swift')],
+                'host/session/ControlChannel.swift', 'host/session/SessionServices.swift',
+                'host/auth/CBOR.swift', 'host/auth/FIDO2.swift', 'host/auth/FIDO2Service.swift',
+                'tests/control-channel.swift', 'tests/fido2-store.swift', 'tests/session-services.swift')],
             '-o', str(session_check)], check=True)
         subprocess.run([str(session_check)], check=True, timeout=10)
         peer = temporary / 'control-peer'

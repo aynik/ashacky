@@ -3,6 +3,24 @@
   "note": "Source/build-to-guest installation map. Does not apply config, enable services, install dependencies, or alter package ownership. Preserve compatibility paths until a coordinated migration.",
   "files": [
     {
+      "source": "guest/auth/fido2.py",
+      "target": "/usr/local/libexec/ashacky-fido2",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/optional/ashacky-fido2.service",
+      "target": "/etc/systemd/system/ashacky-fido2.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/udev/70-ashacky-fido2.rules",
+      "target": "/etc/udev/rules.d/70-ashacky-fido2.rules",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
       "source": "guest/devices/audio_management.py",
       "target": "/opt/linuxhost-probe/audio_management.py",
       "mode": "0644",

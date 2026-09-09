@@ -1,0 +1,15 @@
+--- a/src/channel-display.c
++++ b/src/channel-display.c
+@@ -2147,7 +2147,11 @@ void spice_display_channel_gl_draw_done(SpiceDisplayChannel *display)
+ 
+     out = spice_msg_out_new(channel, SPICE_MSGC_DISPLAY_GL_DRAW_DONE);
+     out->marshallers->msgc_display_gl_draw_done(out->marshaller, NULL);
+-    spice_msg_out_send_internal(out);
++    /* Renderer completion runs in the application main context, not the
++     * display channel's coroutine. Queue the acknowledgement so socket
++     * backpressure cannot make the main context yield as that coroutine.
++     * The channel coroutine serializes and drains its outgoing queue. */
++    spice_msg_out_send(out);
+ }
+ 
+ static void channel_set_handlers(SpiceChannelClass *klass)
