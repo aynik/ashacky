@@ -1,3 +1,4 @@
 #!/bin/bash
 set -euo pipefail
-exec "${ASHACKY_PYTHON:-/usr/bin/python3}" "$(dirname "$0")/vm-ssh.py" "$@"
+: "${ASHACKY_PYTHON:?Set ASHACKY_PYTHON to the configured Python interpreter}"
+exec "$ASHACKY_PYTHON" "$(dirname "$0")/vm-ssh.py" "$@"

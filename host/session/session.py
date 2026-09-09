@@ -4,9 +4,9 @@ import argparse, errno, fcntl, json, os, pathlib, pwd, select, signal, socket, s
 APP=pathlib.Path(__file__).resolve().parents[2]/'build/host/Ashacky.app/Contents'
 STOP=False
 
-def rpc(config, action, **kw):
+def rpc(config, action, *, timeout=85, **kw):
     with socket.socket(socket.AF_UNIX) as s:
-        s.settimeout(85); s.connect(config['socket']+('.supervisor' if action=='vm-stopped' else ''))
+        s.settimeout(timeout); s.connect(config['socket']+('.supervisor' if action=='vm-stopped' else ''))
         s.sendall(json.dumps(dict(action=action,token=config['token'],**kw)).encode()+b'\n')
         return json.loads(s.makefile('rb').readline(16384))
 
@@ -87,7 +87,6 @@ def main():
     for sig in (signal.SIGTERM,signal.SIGINT): signal.signal(sig,lambda *_:globals().__setitem__('STOP',True))
     source=pathlib.Path(__file__).resolve().parents[2]
     services=UserServices({
-        'session-sync':[str(APP/'MacOS/SessionSync')],
         'control-forward':[os.sys.executable,str(source/'host/session/control-forward.py')],
         'device-forwards':[os.sys.executable,str(source/'host/transport/probe-device-service.py')],
         'h264':[str(APP/'MacOS/vtremoted'),'--listen',c['videoBindAddress']+':5557'],
@@ -110,8 +109,6 @@ def main():
                     time.sleep(.5)
         print('Network helpers ready at '+time.strftime('%Y-%m-%d %H:%M:%S'),flush=True)
         services.start_all()
-        with open(runtime/'control.log','ab',buffering=0) as log:
-            children.append(sp.Popen([str(APP/'MacOS/LinuxHostControl')],env=env,stdout=log,stderr=log))
         # A fresh, private mapping for this QEMU session; no pixel traffic over TCP.
         fd=os.open(runtime/'video-frames.bin',os.O_RDWR|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
         try:os.ftruncate(fd,64*1024*1024)
@@ -134,7 +131,17 @@ def main():
         qmp.recv(65536);command('qmp_capabilities');qmp.recv(65536)
         with open(runtime/'display.log','ab',buffering=0) as log:
             view=sp.Popen([str(APP/'MacOS/AshackyLauncher')],env=env,stdout=log,stderr=log);children.append(view)
-        time.sleep(.4);command('cont');print('QMP cont sent at '+time.strftime('%Y-%m-%d %H:%M:%S'),flush=True);shutdown_deadline=None;retries=[]
+        # Control and lock observation are linked into the app. Do not boot the
+        # guest until its authenticated control endpoint is ready.
+        deadline=time.monotonic()+30
+        while True:
+            try:
+                if rpc(control,'status',timeout=2).get('bundleID')=='local.ashacky.host':break
+            except (OSError, ValueError):pass
+            if STOP or view.poll() is not None or time.monotonic()>deadline:
+                raise RuntimeError('Ashacky session services did not become ready; see display.log')
+            time.sleep(.2)
+        command('cont');print('QMP cont sent at '+time.strftime('%Y-%m-%d %H:%M:%S'),flush=True);shutdown_deadline=None;retries=[]
         print('Standalone VM started at '+time.strftime('%Y-%m-%d %H:%M:%S')+' supervisor='+str(os.getpid()),flush=True)
         video_retries=[]
         while qemu.poll() is None:
@@ -167,7 +174,11 @@ def main():
         qemu.wait(timeout=10)
         # Only QMP-confirmed guest shutdown can complete an armed host operation.
         if clean:
-            print('Guest stopped cleanly',flush=True);print(rpc(control,'vm-stopped',clean=True),flush=True);time.sleep(3)
+            print('Guest stopped cleanly',flush=True)
+            # Closing the app also shuts down the guest, but cannot carry an
+            # armed host action: that state belongs to the app process.
+            if view.poll() is None:
+                print(rpc(control,'vm-stopped',clean=True),flush=True);time.sleep(3)
         elif qemu.returncode:raise RuntimeError('QEMU exited unexpectedly')
     finally:
         if qemu and qemu.poll() is None:

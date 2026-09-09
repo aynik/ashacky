@@ -8,14 +8,19 @@ Ashacky provides a Linux desktop on a dedicated macOS account. macOS retains own
 flowchart TB
   Login[macOS login / dedicated account] --> Session[VM supervisor]
   Session --> QEMU[QEMU + HVF]
-  Session --> Frontend[Ashacky.app: CocoaSpice / Metal + device services]
+  Session --> Frontend
+  subgraph App[Ashacky.app — one user process]
+    Frontend[CocoaSpice / Metal + device services]
+    Control[Touch ID, battery and session actions]
+    Sync[Host lock observer]
+  end
   Frontend <-->|SPICE Unix socket| QEMU
   QEMU --> Guest[Linux guest]
   Frontend <-->|touch frames / readiness| Input[virtio-serial input port → uinput]
   Guest <-->|private SSH / Unix socket forwards| Frontend
-  Guest <-->|control requests| Control[Unprivileged host control]
+  Guest <-->|control requests| Control
   Control --> Power[Restricted root power helper]
-  Sync[Host lock observer] <-->|fixed guest session operations| Guest
+  Sync <-->|fixed guest session operations| Guest
   Guest <-->|usbredir| USB[Restricted root USB helper]
   Guest --> VA[VA-API driver / decoder broker]
   VA --> VT[VideoToolbox service]
@@ -23,7 +28,7 @@ flowchart TB
   Memory --> VA
 ```
 
-The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. It connects the network backends, starts host control/video helpers and QEMU, connects the frontend, then continues the guest. It checks for another process using the disk before launch. SessionSync, SSH forwards and both decoder servers belong to this session, with bounded child restarts and cleanup at exit. An intentional guest shutdown does not start a new VM.
+The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. The supervisor connects the network backends, starts the video helpers and paused QEMU, then launches Ashacky. It waits for the app's authenticated control endpoint before continuing the guest. It checks for another process using the disk before launch. SSH forwards and both decoder servers belong to this session, with bounded child restarts and cleanup at exit. Host control and SessionSync are linked into the main app and share its run loop, identity and lifetime. Their guest commands are terminated when the app stops. An intentional guest shutdown does not start a new VM.
 
 SPICE handles display, cursor, keyboard, audio, clipboard and guest display changes. The frontend creates a borderless display window directly rather than entering a native fullscreen Space after a windowed launch. Its escape shortcut is Control–Option–Shift–F12; a keyboard may require Fn for F12. The source supports two guest outputs; more have not been validated.
 

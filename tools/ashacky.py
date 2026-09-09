@@ -9,8 +9,10 @@ import platform
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -30,6 +32,33 @@ def source_files():
         children[:] = [name for name in children if name not in {'.git', 'build', 'third_party', '.local', '__pycache__', '.venv'}]
         for name in files:
             yield Path(directory) / name
+
+
+def check_icon(data):
+    """Allow the source icon without exempting arbitrary binaries or metadata."""
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError('Expected a PNG icon')
+    offset, chunks = 8, []
+    while offset + 12 <= len(data):
+        size, kind = struct.unpack_from('>I4s', data, offset)
+        end = offset + size + 12
+        if end > len(data) or kind not in (b'IHDR', b'sRGB', b'IDAT', b'IEND'):
+            raise ValueError('Unexpected icon chunk or embedded metadata')
+        if zlib.crc32(data[offset + 4:end - 4]) != struct.unpack_from('>I', data, end - 4)[0]:
+            raise ValueError('Invalid icon checksum')
+        chunks.append(kind)
+        if kind == b'IHDR':
+            if len(chunks) != 1 or size != 13 or struct.unpack_from('>IIBBBBB', data, offset + 8) != (1024, 1024, 8, 6, 0, 0, 0):
+                raise ValueError('Expected a 1024x1024 RGBA icon')
+        if kind == b'sRGB' and (size != 1 or data[offset + 8] > 3):
+            raise ValueError('Invalid icon color profile')
+        if kind == b'IEND':
+            if size or end != len(data):
+                raise ValueError('Unexpected data after icon')
+            break
+        offset = end
+    if not chunks or chunks[0] != b'IHDR' or chunks[-1] != b'IEND' or b'IDAT' not in chunks:
+        raise ValueError('Incomplete PNG icon')
 
 
 def check():
@@ -52,6 +81,9 @@ def check():
             failures.append(relative + ': private/generated artifact')
             continue
         try:
+            if relative == 'host/frontend/assets/Ashacky.png':
+                check_icon(path.read_bytes())
+                continue
             content = path.read_text()
             if path.suffix == '.py' or content.startswith('#!/usr/bin/python3') or content.startswith('#!/usr/bin/env python3'):
                 ast.parse(content, filename=relative)
@@ -141,10 +173,6 @@ def build_host(args):
     out = BUILD / 'host'
     out.mkdir(parents=True, exist_ok=True)
     common = ROOT / 'host/common/IPC.swift'
-    run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O', common,
-         ROOT / 'host/control/Control.swift', '-o', out / 'LinuxHostControl'])
-    run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/session/SessionSync.swift', '-o', out / 'SessionSync'])
-    run([out / 'SessionSync', '--self-test'])
     run(['clang', '-O2', '-c', ROOT / 'host/video/fence.c', '-o', out / 'fence.o'])
     run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/video/CodecShared.swift', out / 'fence.o',
          '-o', out / 'LinuxHostVideoShared'])
@@ -156,7 +184,7 @@ def build_host(args):
              generated / 'Installation.swift', ROOT / 'helpers/power/PowerHelper.swift',
              '-o', out / 'LinuxHostPower'])
         run(['clang', '-O2', '-I' + str(generated), ROOT / 'helpers/usb/usb-host.c',
-             *pkg('libusb-1.0', 'libusbredirhost'), '-framework', 'SystemConfiguration', '-framework', 'CoreFoundation',
+             *pkg('libusb-1.0', 'libusbredirhost'),
              '-o', out / 'linuxhost-usb-host'])
     print('Host component outputs:', out)
     print('QEMU, the SPICE frontend and dependency bundle have separate recipes; see docs/BUILD.md.')

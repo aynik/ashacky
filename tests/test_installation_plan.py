@@ -30,6 +30,8 @@ class InstallationPlanTests(unittest.TestCase):
             self.assertEqual(vm['macs'][1], devices['wifiMAC'])
             self.assertNotEqual(vm['userID'], guest['userID'])
             self.assertFalse(control['powerEnabled'])
+            self.assertEqual(read('helper-build.json')['powerClients'],
+                             [vm['appContents'] + '/MacOS/Ashacky'])
             nm = (output / 'guest/etc/NetworkManager/conf.d/90-ashacky-transport.conf').read_text()
             self.assertNotIn('mac:', nm)
             self.assertIn('interface-name:' + devices['wifiInterface'], nm)

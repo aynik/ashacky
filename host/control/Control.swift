@@ -6,7 +6,7 @@ import IOKit.ps
 import Darwin
 import CoreServices
 
-@main final class Control {
+enum Control {
     static var server: UnixServer?
     static var supervisor: UnixServer?
     static var config: [String: Any] = [:]
@@ -17,6 +17,9 @@ import CoreServices
     static var authBusy = false
     static var qemuPID: Int32 = 0
     static var observers: [NSObjectProtocol] = []
+    static var processLock: ServiceProcessLock?
+    static var timer: Timer?
+    static var commands: SessionCommands!
     static var enabled: Bool { config["powerEnabled"] as? Bool == true }
     static func active() -> Bool {
         var uid: uid_t = 0
@@ -34,7 +37,10 @@ import CoreServices
         DispatchQueue.global().async {
             let p = Process(); p.executableURL=URL(fileURLWithPath:"/bin/bash"); p.arguments=[command]+arguments
             p.standardInput=FileHandle.nullDevice
-            do { try p.run() } catch { NSLog("Guest command could not start: %@",String(describing:error)) }
+            do {
+                guard try commands.launch(p) else { return }
+                p.waitUntilExit(); commands.finished(p)
+            } catch { NSLog("Guest command could not start: %@",String(describing:error)) }
         }
     }
     static func request(_ value: [String:Any]) -> [String:Any] {
@@ -48,7 +54,7 @@ import CoreServices
         guard value["token"] as? String == config["token"] as? String else { reply(["ok":false,"error":"Invalid session token"]); return }
         let action=value["action"] as? String ?? ""
         if action=="status" {
-            var result: [String:Any] = ["ok":true,"active":active(),"wakeGeneration":wake,"sleeping":sleeping,"pendingPower":pending ?? "none","backend":"qemu-spice"]
+            var result: [String:Any] = ["ok":true,"active":active(),"wakeGeneration":wake,"sleeping":sleeping,"pendingPower":pending ?? "none","backend":"qemu-spice","bundleID":Bundle.main.bundleIdentifier ?? ""]
             if let info=IOPSCopyPowerSourcesInfo()?.takeRetainedValue(), let sources=IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] {
                 for source in sources {
                     if let battery=IOPSGetPowerSourceDescription(info,source)?.takeUnretainedValue() as? [String:Any] {
@@ -108,15 +114,15 @@ import CoreServices
         default: reply(["ok":false,"error":"Unsupported action"])
         }
     }
-    static func main() throws {
+    static func start(commands: SessionCommands) throws {
+        self.commands = commands
         let path=ProcessInfo.processInfo.environment["LINUXHOST_CONTROL_CONFIG"] ?? ""
         let data=try Data(contentsOf:URL(fileURLWithPath:path))
-        config=try JSONSerialization.jsonObject(with:data) as! [String:Any]
+        guard let value=try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw IPCError.message("Invalid control configuration") }
+        config=value
         guard let endpoint=config["socket"] as? String, let token=config["token"] as? String, token.count>=32 else { throw IPCError.message("Invalid control configuration") }
         signal(SIGPIPE,SIG_IGN)
-        let lock=Darwin.open(endpoint+".lock",O_CREAT|O_RDWR,0o600)
-        guard lock>=0,flock(lock,LOCK_EX|LOCK_NB)==0 else { throw IPCError.message("Control service already running") }
-        let app=NSApplication.shared;app.setActivationPolicy(.accessory)
+        processLock=try ServiceProcessLock(path:endpoint+".lock")
         server=try UnixServer(path:endpoint,mode:0o600) { fd,value in
             var uid:uid_t=0;var gid:gid_t=0
             guard getpeereid(fd,&uid,&gid)==0,uid==getuid() else { return ["ok":false,"error":"Wrong session user"] }
@@ -132,7 +138,14 @@ import CoreServices
         observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;ssh(["loginctl","lock-sessions"]) })
         observers.append(center.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { _ in sleeping=false;wake+=1 })
         observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;ssh(["loginctl","lock-sessions"]) })
-        Timer.scheduledTimer(withTimeInterval:2,repeats:true) { _ in if pending != nil && Date()>deadline { pending=nil } }
-        app.run()
+        timer=Timer.scheduledTimer(withTimeInterval:2,repeats:true) { _ in if pending != nil && Date()>deadline { pending=nil } }
+        NSLog("Ashacky control ready")
+    }
+    static func stop() {
+        pending=nil
+        timer?.invalidate(); timer=nil
+        for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        observers.removeAll()
+        server=nil; supervisor=nil; processLock=nil
     }
 }

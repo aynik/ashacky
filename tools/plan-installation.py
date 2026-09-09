@@ -92,7 +92,7 @@ def generate(c, destination):
     js('host/root/power-policy.json', {'userID': uid, 'enabled': False, 'allowOtherSessions': False}, policy, 'root:wheel')
     js('helper-build.json', {'userID': uid, 'groupID': c['groupID'], 'usbRuntime': str(runtime / 'usb'),
         'powerRuntime': str(runtime / 'power'), 'powerPolicy': policy,
-        'powerClients': [str(app / 'MacOS/LinuxHostControl')]}, 'build input only', owner)
+        'powerClients': [str(app / 'MacOS/Ashacky')]}, 'build input only', owner)
 
     def job(name, arguments, system=False, keep=True, extra=None):
         label = f'local.ashacky.{uid}.{name}'

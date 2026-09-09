@@ -3,8 +3,6 @@ import CoreGraphics
 import SystemConfiguration
 
 // GUI-session-local observation. Wake itself never authorizes an unlock.
-private let guestSSH = ProcessInfo.processInfo.environment["ASHACKY_GUEST_SSH"] ?? ""
-
 struct Snapshot {
     let locked: Bool
     let eligible: Bool
@@ -23,10 +21,17 @@ func shouldLockHost(previous:Bool?, locked:Bool, origin:String, host:Snapshot?, 
 }
 private let loginFramework=dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/A/login",RTLD_LAZY)
 final class Bridge {
+    let guestSSH: String
+    let commands: SessionCommands
+    var timer: Timer?
+    var observers: [NSObjectProtocol] = []
     var sawLock=false
     var generation=0
     var guestLocked:Bool?=nil
     let queue=DispatchQueue(label:"local.linuxhost.session-sync.ssh")
+    init(guestSSH: String, commands: SessionCommands) {
+        self.guestSSH=guestSSH; self.commands=commands
+    }
     func send(_ action:String, generation expected:Int) {
         let expires=Date().addingTimeInterval(20)
         queue.async {
@@ -38,10 +43,11 @@ final class Bridge {
                 guard allowed else { NSLog("Session sync: cancelled stale unlock");return }
             }
             let p=Process();p.executableURL=URL(fileURLWithPath:"/bin/bash")
-            p.arguments=[guestSSH,"/usr/local/libexec/linuxhost-session-sync",action]
+            p.arguments=[self.guestSSH,"/usr/local/libexec/linuxhost-session-sync",action]
             p.standardInput=FileHandle.nullDevice
             do {
-                try p.run()
+                guard try self.commands.launch(p) else { return }
+                defer { self.commands.finished(p) }
                 let limit=Date().addingTimeInterval(20)
                 while p.isRunning && Date()<limit { Thread.sleep(forTimeInterval:0.1) }
                 if p.isRunning { p.terminate(); NSLog("Session sync: %@ timed out",action) }
@@ -50,6 +56,7 @@ final class Bridge {
         }
     }
     func guestState(_ value:[String:Any]) {
+        guard commands.running else { return }
         guard let locked=value["locked"] as? Bool else { return }
         let previous=guestLocked;guestLocked=locked
         guard shouldLockHost(previous:previous,locked:locked,origin:value["origin"] as? String ?? "",host:snapshot(),sawLock:sawLock) else { return }
@@ -64,14 +71,16 @@ final class Bridge {
     }
     func watchGuest() {
         DispatchQueue.global(qos:.utility).async {
-            while true {
+            while self.commands.running {
                 let p=Process();let pipe=Pipe()
                 p.executableURL=URL(fileURLWithPath:"/bin/bash")
-                p.arguments=[guestSSH,"/usr/local/libexec/linuxhost-session-sync","watch"]
+                p.arguments=[self.guestSSH,"/usr/local/libexec/linuxhost-session-sync","watch"]
                 p.standardInput=FileHandle.nullDevice;p.standardOutput=pipe
                 DispatchQueue.main.sync { self.guestLocked=nil }
                 do {
-                    try p.run();var buffer=Data()
+                    guard try self.commands.launch(p) else { return }
+                    defer { self.commands.finished(p) }
+                    var buffer=Data()
                     while true {
                         let chunk=pipe.fileHandleForReading.availableData
                         if chunk.isEmpty { break }
@@ -92,6 +101,7 @@ final class Bridge {
         }
     }
     func sample() {
+        guard commands.running else { return }
         guard let s=snapshot() else { return }
         if s.locked {
             if !sawLock { sawLock=true;generation+=1;NSLog("Session sync: observed macOS lock");send("lock",generation:generation) }
@@ -99,8 +109,23 @@ final class Bridge {
             sawLock=false;generation+=1;NSLog("Session sync: observed macOS unlock");send("unlock",generation:generation)
         }
     }
+    func start() {
+        timer=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true) { [weak self] _ in self?.sample() }
+        let notifications=DistributedNotificationCenter.default()
+        observers=["com.apple.screenIsLocked","com.apple.screenIsUnlocked"].map { name in
+            notifications.addObserver(forName:Notification.Name(name),object:nil,queue:.main) { [weak self] _ in self?.sample() }
+        }
+        sample(); watchGuest()
+        NSLog("Session sync: ready inside Ashacky; no startup unlock")
+    }
+    func stop() {
+        generation+=1
+        timer?.invalidate(); timer=nil
+        for observer in observers { DistributedNotificationCenter.default().removeObserver(observer) }
+        observers.removeAll()
+    }
 }
-if CommandLine.arguments.contains("--self-test") {
+func checkSessionTransitions() {
     let open=Snapshot(locked:false,eligible:true)
     precondition(shouldLockHost(previous:false,locked:true,origin:"guest",host:open,sawLock:false))
     precondition(!shouldLockHost(previous:nil,locked:true,origin:"guest",host:open,sawLock:false))
@@ -111,21 +136,4 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(!shouldLockHost(previous:false,locked:true,origin:"guest",host:Snapshot(locked:false,eligible:false),sawLock:false))
     precondition(!shouldLockHost(previous:false,locked:true,origin:"guest",host:open,sawLock:true))
     print("Reverse-lock transition checks passed")
-    exit(0)
 }
-let app=NSApplication.shared
-guard guestSSH.hasPrefix("/"), FileManager.default.fileExists(atPath:guestSSH) else {
-    fputs("ASHACKY_GUEST_SSH must select this installation's guest SSH wrapper\n",stderr)
-    exit(1)
-}
-app.setActivationPolicy(.accessory)
-let bridge=Bridge()
-let timer=Timer.scheduledTimer(withTimeInterval:0.5,repeats:true) { _ in bridge.sample() }
-let notifications=DistributedNotificationCenter.default()
-let observers=["com.apple.screenIsLocked","com.apple.screenIsUnlocked"].map { name in
-    notifications.addObserver(forName:Notification.Name(name),object:nil,queue:.main) { _ in bridge.sample() }
-}
-bridge.sample()
-bridge.watchGuest()
-NSLog("Session sync: ready; no startup unlock")
-app.run()

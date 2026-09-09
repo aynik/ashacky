@@ -99,6 +99,8 @@ These commands build and stage `build/host/Ashacky.app` and network helpers. The
 
 The individual build stages are `deps`, `render-server`, `qemu`, `network`, `frontend`, and `helpers`, in that order. Run `deps` first to establish the Python environment and library prefix. Logs go to stdout/stderr; keep captured logs under ignored `build/`. Rebuild `frontend` before assembling again after dependency changes. A changed source-preparation receipt requires removing only that inactive component's generated source and build directory, as described in DEVELOPMENT.md.
 
+The app icon source is `host/frontend/assets/Ashacky.png`, a tightly fitted 1024×1024 PNG with transparent corners. Keep the outer background transparent when replacing this asset. The source checker accepts only this specific RGBA icon and rejects embedded EXIF/text metadata; remove that metadata before committing a replacement. The frontend build uses macOS `sips` and `iconutil` to generate the standard icon sizes and package `Ashacky.icns` in the app's Resources directory, with `CFBundleIconFile` selecting it. Replace the source PNG and rebuild `frontend` and the assembled bundle to update the icon.
+
 `check-runtime.py` copies the generated app to a temporary path containing spaces, verifies signatures and all Mach-O dependencies, queries QEMU's devices/HVF/GPU properties, loads the graphics and codec libraries, tests GStreamer with a silent `fakesink`, and creates the Metal shader pipeline. It opens no desktop window, VM, audio device, microphone, camera, network listener or privileged service. This validates relocation and component availability; it does not validate a fresh guest boot.
 
 ### Host helpers
@@ -108,7 +110,7 @@ The individual build stages are `deps`, `render-server`, `qemu`, `network`, `fro
 ./ashacky build host --installation /absolute/private/helper-build.json
 ```
 
-The first command compiles host control, SessionSync and VideoToolbox shared decoding. The frontend build links the Wi-Fi/Bluetooth/audio/camera services into Ashacky.app; they have no separate build scripts or app bundles. The helper command runs SessionSync's transition self-test, which does not lock/unlock a real session. The second also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
+The first command compiles VideoToolbox shared decoding. The frontend build links host control, lock synchronization and Wi-Fi/Bluetooth/audio/camera services into the Ashacky executable. There are no standalone SessionSync or LinuxHostControl executables. `check-runtime.py` runs the bundled lock-transition check and tests session-command cleanup, token validation and the clean-shutdown gate without locking/unlocking a real session or performing power actions. It also verifies that Metal's SPICE connection advertises IOSurface scanout even when SPICE was built without EGL. The second command also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
 
 ```json
 {
@@ -117,7 +119,7 @@ The first command compiles host control, SessionSync and VideoToolbox shared dec
   "usbRuntime": "/var/run/ashacky-501-usb",
   "powerRuntime": "/var/run/ashacky-501-power",
   "powerPolicy": "/Library/Application Support/Ashacky/501/power-policy.json",
-  "powerClients": ["/absolute/checkout/build/host/Ashacky.app/Contents/MacOS/LinuxHostControl"]
+  "powerClients": ["/absolute/checkout/build/host/Ashacky.app/Contents/MacOS/Ashacky"]
 }
 ```
 

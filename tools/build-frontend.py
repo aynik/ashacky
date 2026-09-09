@@ -22,6 +22,21 @@ def run(command):
     subprocess.run([str(item) for item in command], check=True)
 
 
+def build_icon(resources, objects):
+    source = ROOT / 'host/frontend/assets/Ashacky.png'
+    iconset = objects / 'Ashacky.iconset'
+    if iconset.exists():
+        shutil.rmtree(iconset)
+    iconset.mkdir()
+    for size in (16, 32, 128, 256, 512):
+        for scale in (1, 2):
+            suffix = '@2x' if scale == 2 else ''
+            target = iconset / f'icon_{size}x{size}{suffix}.png'
+            pixels = size * scale
+            run(['/usr/bin/sips', '-z', pixels, pixels, source, '--out', target])
+    run(['/usr/bin/iconutil', '--convert', 'icns', '--output', resources / 'Ashacky.icns', iconset])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compile-shaders', action='store_true',
@@ -49,6 +64,8 @@ def main():
         raise RuntimeError('Refusing to rebuild a running or redirected app')
     (contents / 'MacOS').mkdir(parents=True, exist_ok=True)
     resources = contents / 'Resources'
+    resources.mkdir(parents=True, exist_ok=True)
+    build_icon(resources, objects)
     bundle = resources / 'CocoaSpice_CocoaSpiceRenderer.bundle/Contents'
     if bundle.parent.exists():
         shutil.rmtree(bundle.parent)
@@ -81,6 +98,8 @@ def main():
     host_sources = [ROOT / 'host/common/IPC.swift', *[ROOT / 'host/devices' / name for name in
         ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
          'CameraService.swift', 'HostServices.swift')]]
+    host_sources += [ROOT / name for name in ('host/control/Control.swift',
+        'host/session/SessionSync.swift', 'host/session/SessionServices.swift')]
     host_object = objects / 'host-services.o'
     run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O', '-whole-module-optimization',
          '-module-name', 'AshackyHost', '-emit-object', '-emit-objc-header',
@@ -95,7 +114,8 @@ def main():
         compiled.append(obj)
     libraries = pkg('--libs')
     for framework in ('Cocoa', 'Metal', 'MetalKit', 'CoreGraphics', 'IOSurface', 'AVFoundation', 'AudioToolbox',
-                      'CoreLocation', 'CoreWLAN', 'CoreBluetooth', 'IOBluetooth', 'SystemConfiguration', 'CoreAudio'):
+                      'CoreLocation', 'CoreWLAN', 'CoreBluetooth', 'IOBluetooth', 'SystemConfiguration', 'CoreAudio',
+                      'LocalAuthentication', 'IOKit', 'CoreServices'):
         libraries += ['-framework', framework]
     # Swift's linker driver includes the Swift runtime required by the services.
     link_flags = []
@@ -106,9 +126,13 @@ def main():
          '-o', contents / 'MacOS/AshackyLauncher'])
     # Retire the old frontend name when rebuilding an existing output directory.
     (contents / 'MacOS/LinuxHostSPICE').unlink(missing_ok=True)
+    for name in ('LinuxHostControl', 'SessionSync'):
+        (contents / 'MacOS' / name).unlink(missing_ok=True)
     (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'local.ashacky.host',
         'CFBundleName': 'Ashacky', 'CFBundleDisplayName': 'Ashacky', 'CFBundleExecutable': 'Ashacky', 'CFBundlePackageType': 'APPL',
+        'CFBundleIconFile': 'Ashacky.icns',
         'CFBundleVersion': '1', 'LSMinimumSystemVersion': '12.0', 'NSHighResolutionCapable': True,
+        'NSLocalNetworkUsageDescription': 'Communicate with your Linux virtual machine for device and session integration.',
         'NSMicrophoneUsageDescription': 'Send microphone audio to your Linux virtual machine.',
         'NSCameraUsageDescription': 'Send live camera video to your Linux virtual machine when requested.',
         'NSLocationUsageDescription': 'Discover Wi-Fi networks and manage the connection from Linux.',

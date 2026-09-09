@@ -63,7 +63,7 @@ class ConfigurationTests(unittest.TestCase):
         config = {'userID': 501, 'groupID': 20, 'usbRuntime': '/var/run/ashacky-test-usb',
                   'powerRuntime': '/var/run/ashacky-test-power',
                   'powerPolicy': '/Library/Application Support/Ashacky-Test/power.json',
-                  'powerClients': ['/tmp/example/Ashacky.app/Contents/MacOS/LinuxHostControl']}
+                  'powerClients': ['/tmp/example/Ashacky.app/Contents/MacOS/Ashacky']}
         with tempfile.TemporaryDirectory() as temp:
             builder.host_constants(config, Path(temp))
             self.assertIn('ASHACKY_USER_ID 501', (Path(temp) / 'installation.h').read_text())

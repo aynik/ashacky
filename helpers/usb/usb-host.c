@@ -1,6 +1,5 @@
 #include <libusb.h>
 #include <usbredirhost.h>
-#include <SystemConfiguration/SystemConfiguration.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/file.h>
@@ -39,7 +38,9 @@ static int direct_ports(int fd){
 }
 static volatile sig_atomic_t stopping=0;
 static void stop_signal(int sig){stopping=1;}
-static int active(void){uid_t uid=0;CFStringRef u=SCDynamicStoreCopyConsoleUser(NULL,&uid,NULL);if(u)CFRelease(u);return uid==ASHACKY_USER_ID;}
+/* /dev/console is maintained by macOS. Unlike SystemConfiguration's cached
+ * Mach connection, stat remains safe in the forked USB workers. */
+static int active(void){struct stat info;return stat("/dev/console",&info)==0&&info.st_uid==ASHACKY_USER_ID;}
 static void logmsg(void *p,int level,const char *msg){if(level<=2)fprintf(stderr,"USB: %s\n",msg);}
 static int rd(void *p,uint8_t *b,int n){int r=(int)read(*(int*)p,b,n);if(r<0&&(errno==EAGAIN||errno==EINTR))return 0;return r==0?-1:r;}
 static int wr(void *p,uint8_t *b,int n){int r=(int)write(*(int*)p,b,n);if(r<0&&(errno==EAGAIN||errno==EINTR))return 0;return r;}
@@ -110,6 +111,6 @@ int main(void){
  while(!stopping){int client=accept(fd,NULL,NULL);if(client<0)continue;uid_t uid;gid_t gid;
   if(getpeereid(client,&uid,&gid)||uid!=ASHACKY_USER_ID||!active()){close(client);continue;}
   if(!direct_ports(client)){static time_t logged=0;if(time(NULL)-logged>30){fprintf(stderr,"USB waiting for QEMU with four explicit root ports\n");logged=time(NULL);}close(client);continue;}
-  pid_t pid=fork();if(pid==0){close(fd);serve(client);close(client);_exit(0);}close(client);
+  pid_t pid=fork();if(pid==0){close(instance);close(fd);serve(client);close(client);_exit(0);}close(client);
  }
 }

@@ -82,6 +82,8 @@ def main():
         staged = Path(temporary) / 'Ashacky.app'
         shutil.copytree(app, staged, symlinks=True)
         contents = staged / 'Contents'
+        for name in ('LinuxHostControl', 'SessionSync'):
+            (contents / 'MacOS' / name).unlink(missing_ok=True)
         frameworks = contents / 'Frameworks'
         shutil.rmtree(frameworks, ignore_errors=True)
         shutil.copytree(assets / 'Frameworks', frameworks, symlinks=True)
@@ -92,8 +94,8 @@ def main():
                 relative = path.relative_to(contents)
                 origins[path] = ((assets / relative) if relative.parts[0] == 'Frameworks'
                                  else app / 'Contents' / relative).resolve()
-        for name in ('qemu-system-aarch64', 'qemu-img', 'virgl_render_server', 'LinuxHostControl',
-                     'LinuxHostVideoShared', 'vtremoted', 'SessionSync'):
+        for name in ('qemu-system-aarch64', 'qemu-img', 'virgl_render_server',
+                     'LinuxHostVideoShared', 'vtremoted'):
             target = contents / 'MacOS' / name
             source = BUILD / 'host' / name
             shutil.copy2(source, target)

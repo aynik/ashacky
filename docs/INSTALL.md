@@ -1,6 +1,6 @@
 # Agent installation workflow
 
-Read [README.md](../README.md), [STATUS.md](STATUS.md), [BUILD.md](BUILD.md) and [DEVELOPMENT.md](DEVELOPMENT.md) first. Use [PROVISIONING.md](PROVISIONING.md) for the concrete offline plan and Debian/account recipe. The build and staging tools do not apply settings or install services; the installing agent applies reviewed outputs and records its actions. Fresh-account acceptance remains unverified. The current reference account remains on its existing working installation.
+Read [README.md](../README.md), [STATUS.md](STATUS.md), [BUILD.md](BUILD.md) and [DEVELOPMENT.md](DEVELOPMENT.md) first. Use [PROVISIONING.md](PROVISIONING.md) for the concrete offline plan and Debian/account recipe. The build and staging tools do not apply settings or install services; the installing agent applies reviewed outputs and records its actions. Fresh-account acceptance remains unverified. The reference account now runs the repository-built runtime; this does not establish fresh-account acceptance.
 
 ## Scope and discovery
 
@@ -33,9 +33,9 @@ Use existing task authorization for the requested dedicated-session setup. Ask o
 
 ## Host services and startup
 
-Generate user LaunchAgents for the session supervisor, control forward, device-service forwards and SessionSync. The CocoaSpice display and permission services share Ashacky.app; do not generate separate device-app jobs. Use absolute discovered paths; LaunchAgents do not inherit an interactive shell's PATH. Provide `LINUXHOST_SESSION_CONFIG`, `LINUXHOST_CONTROL_CONFIG` and `ASHACKY_GUEST_SSH` explicitly where used. Respect Unix socket path length limits.
+Generate one user LaunchAgent for the session supervisor, which owns the SSH forwards and decoder children. The CocoaSpice display, device services, host control and lock synchronization share the Ashacky executable; do not generate separate jobs or executables for these services. Use absolute discovered paths; LaunchAgents do not inherit an interactive shell's PATH. Provide `LINUXHOST_SESSION_CONFIG`, `LINUXHOST_CONTROL_CONFIG`, `ASHACKY_GUEST_SSH` and `ASHACKY_PYTHON` explicitly. The SSH wrapper requires the configured interpreter instead of choosing a system Python. Respect Unix socket path length limits.
 
-Also generate a per-user LaunchAgent for the patched `vtremoted` H.264 server built in BUILD.md. Its `--listen` address/port must match the guest broker configuration. Do not assume the supervisor's VP9 helper serves H.264, and do not use upstream's generic service-install script or its default listener. Bundle the server's LZ4/Zstandard runtime dependencies. The server build is separate from `./ashacky build host`; the runtime builder, assembler and offline plan generator cover these outputs.
+Bundle the patched `vtremoted` H.264 server built in BUILD.md; the session supervisor starts it as a child, so it needs no separate LaunchAgent. Its `--listen` address/port must match the guest broker configuration. Do not assume the supervisor's VP9 helper serves H.264, and do not use upstream's generic service-install script or its default listener. Bundle the server's LZ4/Zstandard runtime dependencies. The server build is separate from `./ashacky build host`; the runtime builder, assembler and offline plan generator cover these outputs.
 
 Host transport config has exactly `uuid`, `privateDirectory`, `managementSubnet` and `fallbackAddress`, with protected permissions. VM config selects `userID`, `uuid`, `diskSerial`, `disk`, `vars`, `shared`, `runtime`, `control`, the two `macs` and `networks`, `usbSocket`, `videoBindAddress`, and optional `appContents`, CPU/memory/name values. Generate matching control config and power helper constants. Never point these inputs at an unrelated existing VM.
 

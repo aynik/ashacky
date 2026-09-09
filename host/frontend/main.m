@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #import "CSConnection.h"
+#import "CSSession+Protected.h"
 #import "CSMain.h"
 #import "CSInput.h"
 #import "CSDisplay+Renderer.h"
@@ -19,6 +20,14 @@
 #import "CSPort.h"
 #import "CSPortDelegate.h"
 #import "AshackyHost-Swift.h"
+
+static CSConnection *displayConnection(NSURL *socketURL) {
+ CSConnection *connection=[[CSConnection alloc] initWithUnixSocketFile:socketURL];
+ // Metal consumes UTM's IOSurface scanout without EGL. The bundled SPICE
+ // client is built without EGL, so its default disables this capability.
+ g_object_set(connection.session.session,"gl-scanout",TRUE,NULL);
+ return connection;
+}
 
 @interface CSUSBManager (LinuxHostFilter)
 - (void)setRedirectOnConnectFilter:(NSString *)filter;
@@ -57,6 +66,7 @@
 @implementation DisplaySlot @end
 @interface App : NSObject<NSApplicationDelegate,CSConnectionDelegate,NSWindowDelegate,CSPortDelegate>
 @property(nonatomic,strong) AshackyHostServices *hostServices;
+@property(nonatomic,strong) AshackySessionServices *sessionServices;
 @property(nonatomic) BOOL setupMode;
 @property(nonatomic,strong) HostWindow *window;
 @property(nonatomic,strong) GuestView *view;
@@ -257,6 +267,11 @@
   exit(EXIT_FAILURE);
  }
  if(self.setupMode) { [self.hostServices requestMissingPermissions]; return; }
+ self.sessionServices=[AshackySessionServices new];
+ if(![self.sessionServices startAndReturnError:&serviceError]) {
+  NSLog(@"Ashacky session services failed: %@",serviceError.localizedDescription);
+  exit(EXIT_FAILURE);
+ }
  self.borderless=YES;
  self.slots=[NSMutableArray array];self.displays=[NSMutableDictionary dictionary];
  NSScreen *screen=NSScreen.screens.firstObject;
@@ -291,7 +306,7 @@
  [CSMain.sharedInstance spiceStart];
  NSString *path=NSProcessInfo.processInfo.environment[@"LINUXHOST_SPICE_SOCKET"];
  if (!path) { NSLog(@"Missing SPICE socket configuration"); [NSApp terminate:nil]; return; }
- self.connection=[[CSConnection alloc] initWithUnixSocketFile:[NSURL fileURLWithPath:path]];
+ self.connection=displayConnection([NSURL fileURLWithPath:path]);
  self.connection.delegate=self;
  self.connection.audioEnabled=YES;
  self.pasteboard=[HostPasteboard new]; self.pasteboard.lastChange=NSPasteboard.generalPasteboard.changeCount;
@@ -379,7 +394,7 @@
 - (void)windowDidResize:(NSNotification *)n { [self resizeDisplay]; }
 - (void)windowDidResignKey:(NSNotification *)n { [self setHostCursorHidden:NO]; for(DisplaySlot *slot in self.slots) if(slot.window==n.object) [slot.view releaseGuestKeys]; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
-- (void)applicationWillTerminate:(NSNotification *)n { [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.hostServices stop]; }
+- (void)applicationWillTerminate:(NSNotification *)n { [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.sessionServices stop]; [self.hostServices stop]; }
 - (void)spiceConnected:(CSConnection *)c { dispatch_async(dispatch_get_main_queue(), ^{ NSLog(@"SPICE connected");
  c.usbManager.isAutoConnect=NO;
  }); }
@@ -414,6 +429,24 @@
 - (void)spiceForwardedPortClosed:(CSConnection *)c port:(CSPort *)p { dispatch_async(dispatch_get_main_queue(), ^{}); }
 @end
 int main(int argc,const char **argv) {
+ if(argc==2 && strcmp(argv[1],"--check-session-transitions")==0) {
+  @autoreleasepool { [AshackySessionServices checkTransitions]; }
+  return EXIT_SUCCESS;
+ }
+ if(argc==2 && strcmp(argv[1],"--check-display-transport")==0) {
+  @autoreleasepool {
+   if(![CSMain.sharedInstance spiceStart]) return EXIT_FAILURE;
+   gboolean enabled=FALSE;
+   @autoreleasepool {
+    CSConnection *connection=displayConnection([NSURL fileURLWithPath:@"/unused-spice-check.sock"]);
+    g_object_get(connection.session.session,"gl-scanout",&enabled,NULL);
+   }
+   [CSMain.sharedInstance spiceStop];
+   if(!enabled) { fputs("SPICE GL scanout is disabled\n",stderr);return EXIT_FAILURE; }
+   puts("Metal/IOSurface SPICE scanout enabled; no connection opened.");
+   return EXIT_SUCCESS;
+  }
+ }
  const char *logPath=getenv("ASHACKY_DISPLAY_LOG");
  if(logPath) {
   int fd=open(logPath,O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW,0600);

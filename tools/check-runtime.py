@@ -41,6 +41,17 @@ def main():
 
         print(run('qemu-system-aarch64', '--version').splitlines()[0])
         print(run('qemu-img', '--version').splitlines()[0])
+        print(run('Ashacky', '--check-display-transport').strip())
+        print(run('Ashacky', '--check-session-transitions').strip())
+        for obsolete in ('LinuxHostControl', 'SessionSync'):
+            if (contents / 'MacOS' / obsolete).exists():
+                raise RuntimeError('Obsolete standalone session helper: ' + obsolete)
+        session_check = temporary / 'session-service-checks'
+        subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
+            *[str(ROOT / name) for name in ('host/common/IPC.swift', 'host/control/Control.swift',
+                'host/session/SessionSync.swift', 'host/session/SessionServices.swift', 'tests/session-services.swift')],
+            '-o', str(session_check)], check=True)
+        subprocess.run([str(session_check)], check=True, timeout=10)
         assert 'hvf' in run('qemu-system-aarch64', '-accel', 'help')
         devices = run('qemu-system-aarch64', '-device', 'help')
         for device in ('virtio-ramfb-gl', 'usb-redir', 'linuxhost-shmem', 'virtio-9p-pci'):
