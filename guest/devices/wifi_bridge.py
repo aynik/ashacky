@@ -6,6 +6,7 @@ in memory only; never save or log the request payload.
 """
 import argparse
 import base64
+import contextlib
 import errno
 import fcntl
 import json
@@ -16,6 +17,7 @@ import socket
 import struct
 import time
 from wifi_scan import parse_bss, scan
+from wifi_link import LinkFollower, StatusWatch, actual_bss, compatible, identity, report
 
 GET_SCAN = 0x80044C01
 FINISH_SCAN = 0x40044C02
@@ -26,6 +28,7 @@ CONNECTION_RESULT = 0x40104C05
 SIGNAL = 0x40084C06
 GET_CAPABILITIES = 0x80044C07
 CAP_REQUEST_POLL = 1
+CAP_HOST_LINK = 2
 
 
 class RequestWait:
@@ -38,10 +41,18 @@ class RequestWait:
             if error.errno != errno.ENOTTY:
                 raise
         self.poller = None
-        if struct.unpack('=I', capabilities)[0] & CAP_REQUEST_POLL:
+        self.capabilities = struct.unpack('=I', capabilities)[0]
+        self.watched = None
+        if self.capabilities & CAP_REQUEST_POLL:
             self.poller = select.poll()
             self.poller.register(device, select.POLLIN)
         print('Wi-Fi request delivery: ' + ('kernel notifications' if self.poller else 'compatibility polling'), flush=True)
+
+    def watch(self, watcher):
+        if self.poller is None or self.watched == watcher.fd: return
+        if self.watched is not None: self.poller.unregister(self.watched)
+        self.watched = watcher.fd
+        if self.watched is not None: self.poller.register(self.watched, select.POLLIN)
 
     def wait(self, timeout=None):
         if self.poller is None:
@@ -70,7 +81,7 @@ def signal_payload(state):
     return struct.pack('<6sbB', address, value, 0)
 
 
-def handle_connection(payload, rpc):
+def handle_connection(payload, rpc, publish=None):
     number, operation, ssid_len, key_len, reserved, bssid, ssid, key = CONNECTION.unpack(payload)
     if not number or operation not in (1, 2) or reserved:
         raise ValueError('Invalid kernel connection request')
@@ -83,8 +94,9 @@ def handle_connection(payload, rpc):
     if not 1 <= ssid_len <= 32 or key_len not in (0, 32):
         raise ValueError('Invalid network/key size')
     target = ssid[:ssid_len]
-    candidates = [record for record in scan(rpc) if record.ssid == target and
-                  (bssid == b'\0' * 6 or record.bssid == bssid)]
+    records = scan(rpc)
+    candidates = [record for record in records if record.ssid == target and
+                  (bssid == b'\0' * 6 or record.bssid == bssid) and compatible(record, bool(key_len))]
     if not candidates:
         raise RuntimeError('Selected network absent from current host scan')
     selected = max(candidates, key=lambda record: record.signal_mbm)
@@ -103,11 +115,16 @@ def handle_connection(payload, rpc):
         raise RuntimeError('Host omitted valid associated BSSID')
     if bssid != b'\0' * 6 and actual != bssid:
         raise RuntimeError('Host associated to a different requested BSSID')
+    if not any(r.ssid == target and r.bssid == actual for r in records):
+        records = scan(rpc)
+        if identity(rpc({'action': 'wifi-status'})) != (target, actual):
+            raise RuntimeError('Host changed association during verification')
+    confirmed = actual_bss(records, target, actual, bool(key_len))
+    if publish: publish(number, confirmed)
     return actual
 
 
 def serve(path, once=False):
-    raw = {}
     def rpc(request, timeout=85):
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(timeout)
@@ -119,22 +136,30 @@ def serve(path, once=False):
             reply = json.loads(line)
             if not reply.get('ok'):
                 raise RuntimeError(reply.get('error', 'Host scan failed'))
-            for entry in reply.get('networks', []):
-                raw[entry['networkID']] = entry
             return reply
 
-    with open('/dev/linuxhost-wifi', 'wb', buffering=0) as device:
+    with open('/dev/linuxhost-wifi', 'wb', buffering=0) as device, contextlib.ExitStack() as cleanup:
         wait = RequestWait(device)
+        follower = LinkFollower(device) if wait.capabilities & CAP_HOST_LINK else None
+        watcher = StatusWatch() if follower and not once else None
+        if watcher: cleanup.callback(watcher.close)
+        if follower: print('Wi-Fi association: host BSS selection and link reports', flush=True)
         previous = 0
         next_signal = 0
+        link_error = None
         while True:
+            if watcher:
+                watcher.open()
+                if watcher.changed(): next_signal = 0
+                wait.watch(watcher)
             connection = bytearray(CONNECTION.size)
             fcntl.ioctl(device, GET_CONNECTION, connection)
             op_sequence = struct.unpack_from('<I', connection)[0]
             if op_sequence:
                 status_code, address = 1, b'\0' * 6
                 try:
-                    address = handle_connection(connection, rpc)
+                    publish = (lambda sequence, bss: report(device, sequence, 2, bss)) if follower else None
+                    address = handle_connection(connection, rpc, publish)
                     status_code = 0
                 except Exception as error:
                     # RuntimeError text here is a fixed bridge/backend diagnostic,
@@ -150,6 +175,7 @@ def serve(path, once=False):
                 except OSError:
                     pass  # Kernel cancelled/timed out while host was working.
                 print(json.dumps({'connection_sequence': op_sequence, 'host_operation_ok': status_code == 0}), flush=True)
+                next_signal = 0
                 if once:
                     if status_code:
                         raise SystemExit(1)
@@ -162,27 +188,36 @@ def serve(path, once=False):
                 if not once and time.monotonic() >= next_signal:
                     next_signal = time.monotonic() + 5
                     try:
-                        payload = signal_payload(rpc({'action': 'wifi-status'}, timeout=2))
-                        if payload is not None:
-                            fcntl.ioctl(device, SIGNAL, payload)
-                    except (OSError, ValueError, RuntimeError):
-                        pass  # Kernel expires stale samples; never invent signal.
-                # The separate five-second signal refresh remains unchanged.
-                # poll() sleeps until a kernel request or that deadline; it is
-                # not a repeated userspace check for work. --once has no timer.
+                        link = follower.snapshot() if follower else None
+                        active = not watcher or watcher.key is None or watcher.key[1] is not False
+                        if active and (link is None or link[1] & 1 and not link[1] & 8):
+                            state = rpc({'action': 'wifi-status'}, timeout=2)
+                            if follower:
+                                follower.update(link, state, rpc)
+                                if follower.missing: next_signal = min(next_signal, follower.missing[1])
+                            payload = signal_payload(state)
+                            if payload is not None: fcntl.ioctl(device, SIGNAL, payload)
+                            if link_error:
+                                print('Wi-Fi host link update recovered', flush=True); link_error = None
+                    except (OSError, ValueError, RuntimeError) as error:
+                        # New kernel work can supersede a bounded host request.
+                        # Its generation wins; do not apply a delayed link state.
+                        if follower and not (isinstance(error, OSError) and error.errno == errno.ESTALE):
+                            kind = type(error).__name__
+                            if kind != link_error:
+                                print('Wi-Fi host link update unavailable:', kind, flush=True); link_error = kind
+                        # The kernel expires stale signal; never invent a sample.
+                # Status changes also wake this wait. The five-second signal
+                # deadline remains a compatibility/recovery check for the link.
                 wait.wait(None if once else next_signal - time.monotonic())
                 continue
             previous = number
-            raw.clear()
             try:
                 records = scan(rpc)
                 for bss in records:
-                    entry = raw[bss.network_id]
-                    if type(entry.get('open')) is not bool:
-                        raise ValueError('Host omitted network security classification')
                     # ESS and privacy describe the host's actual BSS. Other
                     # capabilities are not invented. Beacon interval unknown.
-                    capability = 1 | (0 if entry['open'] else 0x10)
+                    capability = 1 | (0 if bss.open else 0x10)
                     header = struct.pack('<IIiHH6sH', number, bss.frequency_mhz,
                                          bss.signal_mbm, capability, 0,
                                          bss.bssid, len(bss.information_elements))

@@ -40,6 +40,19 @@ This is not the guest runtime package list. The kernel build additionally needs 
 
 This prepares the pinned rockchip-vaapi source with Ashacky's patch and compiles it with the maintained `guest/video` helpers. It produces the PAM module, camera-reader utility and VA driver. The kernel option builds Wi-Fi, Bluetooth rfkill and battery modules in `build/guest/drivers`. The distribution supplies v4l2loopback.
 
+### Optional Wi-Fi kernel link check
+
+The normal source checks cover AP selection, security validation, link generations and status-file notifications with fixtures. To exercise the actual cfg80211 link ABI, this separate check builds a renamed copy of the current module for a dummy NIC in a fresh network namespace. It needs the running kernel's headers, `cc`, `make`, `ip` (iproute2), `unshare` (util-linux) and the module utilities. Build as the ordinary user, then explicitly run with root:
+
+```sh
+python3 tools/check-wifi-link-kernel.py
+sudo python3 tools/check-wifi-link-kernel.py --run
+```
+
+The run verifies its recorded build hashes, creates a separate wiphy and misc device, exercises synthetic association/roaming/pin/security cases, then unloads the fixture. It does not call macOS, change the physical radio or use a saved network profile. The namespace isolates network state, not the kernel: use this only where loading a test module is appropriate. It is not part of `./ashacky check`, does not install the production DKMS module, and cannot establish physical roaming behavior.
+
+### H.264 decoder build
+
 H.264 needs the pinned remote FFmpeg decoder, not a stock FFmpeg library:
 
 ```sh

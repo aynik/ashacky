@@ -9,6 +9,7 @@
 #include <linux/uaccess.h>
 #include <linux/rtnetlink.h>
 #include <linux/if_arp.h>
+#include <linux/unaligned.h>
 #include <net/cfg80211.h>
 
 #define LH_GET_SCAN _IOR('L', 1, __u32)
@@ -34,6 +35,29 @@ struct lh_signal {
 #define LH_SIGNAL _IOW('L', 6, struct lh_signal)
 #define LH_GET_CAPABILITIES _IOR('L', 7, __u32)
 #define LH_CAP_REQUEST_POLL BIT(0)
+#define LH_CAP_HOST_LINK BIT(1)
+/* No keys in link snapshots. A generation rejects reports for old sessions. */
+struct lh_link {
+	__le32 sequence;
+	u8 flags, ssid_length;
+	__le16 reserved;
+	u8 bssid[ETH_ALEN], ssid[32];
+} __packed;
+#define LH_LINK_CONNECTED BIT(0)
+#define LH_LINK_PRIVATE BIT(1)
+#define LH_LINK_PINNED BIT(2)
+#define LH_LINK_BUSY BIT(3)
+struct lh_link_report {
+	__le32 sequence;
+	u8 state, ssid_length; /* 0 = down, 1 = roam, 2 = initial BSS */
+	__le16 ie_length;
+	__le32 frequency, signal;
+	__le16 capability, beacon_interval;
+	u8 bssid[ETH_ALEN], ssid[32];
+} __packed;
+#define LH_GET_LINK _IOR('L', 8, struct lh_link)
+/* The fixed header is followed by ie_length bytes, bounded to 4096. */
+#define LH_REPORT_LINK _IOW('L', 9, struct lh_link_report)
 struct lh_record {
 	__le32 sequence, frequency, signal;
 	__le16 capability, beacon_interval;
@@ -54,6 +78,8 @@ struct lh_priv {
 	unsigned long connection_deadline;
 	u16 disconnect_reason;
 	bool connected;
+	u8 ssid[32], ssid_length;
+	bool privacy, pinned;
 	u8 associated_bssid[ETH_ALEN];
 	s8 signal;
 	bool signal_valid;
@@ -87,6 +113,12 @@ static void finish_connection(struct lh_priv *p, u16 status, const u8 *bssid)
 {
 	u8 operation = p->connection.operation;
 	if (!operation) return;
+	if (operation == 1 && status == WLAN_STATUS_SUCCESS) {
+		p->ssid_length = p->connection.ssid_length;
+		memcpy(p->ssid, p->connection.ssid, sizeof(p->ssid));
+		p->privacy = p->connection.psk_length != 0;
+		p->pinned = !is_zero_ether_addr(p->connection.bssid);
+	}
 	memzero_explicit(&p->connection, sizeof(p->connection));
 	p->signal_valid = false;
 	if (operation == 1) {
@@ -99,6 +131,11 @@ static void finish_connection(struct lh_priv *p, u16 status, const u8 *bssid)
 		if (p->connected)
 			cfg80211_disconnected(p->netdev, p->disconnect_reason, NULL, 0, true, GFP_KERNEL);
 		WRITE_ONCE(p->connected, false);
+	}
+	if (!p->connected) {
+		memzero_explicit(p->ssid, sizeof(p->ssid));
+		p->ssid_length = 0; p->privacy = false; p->pinned = false;
+		eth_zero_addr(p->associated_bssid);
 	}
 	rcu_read_lock();
 	if (p->connected && rcu_dereference(p->lower) && netif_carrier_ok(rcu_dereference(p->lower)))
@@ -134,8 +171,12 @@ static int connect_network(struct wiphy *wiphy, struct net_device *dev,
 	if (p->scan || p->connection.operation || p->connected) return -EBUSY;
 	if (!sme->ssid || !sme->ssid_len || sme->ssid_len > 32) return -EINVAL;
 	if (sme->crypto.sae_pwd || sme->key_len) return -EOPNOTSUPP;
+	if (sme->mfp == NL80211_MFP_REQUIRED) return -EOPNOTSUPP;
+	if (!sme->privacy && sme->crypto.psk) return -EINVAL;
 	if (sme->privacy && (!sme->crypto.psk ||
 	    sme->crypto.wpa_versions != NL80211_WPA_VERSION_2 ||
+	    sme->crypto.cipher_group != WLAN_CIPHER_SUITE_CCMP ||
+	    sme->crypto.n_ciphers_pairwise != 1 || sme->crypto.ciphers_pairwise[0] != WLAN_CIPHER_SUITE_CCMP ||
 	    sme->crypto.n_akm_suites != 1 || sme->crypto.akm_suites[0] != WLAN_AKM_SUITE_PSK))
 		return -EOPNOTSUPP;
 	begin_connection(p, 1);
@@ -221,15 +262,114 @@ static const struct cfg80211_ops wireless_ops = {
 	.connect = connect_network, .disconnect = disconnect_network,
 	.get_station = get_station, .dump_station = dump_station,
 };
+/* Validate the open or WPA2/CCMP/PSK contract, including after host roaming. */
+static bool compatible_security(const u8 *ies, size_t len, bool privacy, u16 capability)
+{
+	const u8 *rsn = cfg80211_find_ie(WLAN_EID_RSN, ies, len);
+	const u8 ccmp[] = { 0x00, 0x0f, 0xac, 4 }, psk[] = { 0x00, 0x0f, 0xac, 2 };
+	const u8 *end, *cursor;
+	u16 count, i;
+	bool found = false;
+	if (!!(capability & WLAN_CAPABILITY_PRIVACY) != privacy) return false;
+	if (!privacy)
+		return !rsn && !cfg80211_find_vendor_ie(WLAN_OUI_MICROSOFT, WLAN_OUI_TYPE_MICROSOFT_WPA, ies, len);
+	if (!rsn || rsn[1] < 18) return false;
+	cursor = rsn + 2; end = cursor + rsn[1];
+	if (get_unaligned_le16(cursor) != 1 || memcmp(cursor + 2, ccmp, 4)) return false;
+	cursor += 6;
+	count = get_unaligned_le16(cursor); cursor += 2;
+	if (!count || count > (end - cursor) / 4) return false;
+	for (i = 0; i < count; ++i, cursor += 4)
+		if (!memcmp(cursor, ccmp, 4)) found = true;
+	if (!found || end - cursor < 2) return false;
+	count = get_unaligned_le16(cursor); cursor += 2; found = false;
+	if (!count || count > (end - cursor) / 4) return false;
+	for (i = 0; i < count; ++i, cursor += 4)
+		if (!memcmp(cursor, psk, 4)) found = true;
+	return found && (cursor == end || (end - cursor >= 2 && !(get_unaligned_le16(cursor) & BIT(6))));
+}
+
+static long report_link(struct lh_priv *p, unsigned long arg)
+{
+	struct lh_link_report header, *report;
+	struct cfg80211_roam_info roam = {};
+	struct cfg80211_bss *bss;
+	struct ieee80211_channel *channel;
+	const u8 *ssid, *pin, *ies;
+	u8 ssid_length;
+	bool privacy;
+	s32 signal;
+	size_t len, offset;
+	unsigned ssids = 0, rsns = 0;
+	long result = 0;
+	if (copy_from_user(&header, (void __user *)arg, sizeof(header))) return -EFAULT;
+	len = le16_to_cpu(header.ie_length);
+	if (len > 4096) return -EINVAL;
+	report = memdup_user((void __user *)arg, sizeof(header) + len);
+	if (IS_ERR(report)) return PTR_ERR(report);
+	if (le16_to_cpu(report->ie_length) != len || report->state > 2) { result = -EINVAL; goto out; }
+	wiphy_lock(radio);
+	if (le32_to_cpu(report->sequence) != p->connection_sequence ||
+	    (report->state == 2 ? p->connection.operation != 1 : (!p->connected || p->connection.operation))) {
+		result = -ESTALE; goto unlock;
+	}
+	if (!report->state) {
+		if (len || report->ssid_length || report->frequency || report->signal ||
+		    report->capability || report->beacon_interval ||
+		    memchr_inv(report->ssid, 0, sizeof(report->ssid)) || !is_zero_ether_addr(report->bssid)) {
+			result = -EINVAL; goto unlock;
+		}
+		cfg80211_disconnected(p->netdev, WLAN_REASON_UNSPECIFIED, NULL, 0, false, GFP_KERNEL);
+		WRITE_ONCE(p->connected, false); p->signal_valid = false;
+		memzero_explicit(p->ssid, sizeof(p->ssid)); p->ssid_length = 0;
+		p->privacy = false; p->pinned = false; eth_zero_addr(p->associated_bssid);
+		netif_carrier_off(p->netdev); goto unlock;
+	}
+	ssid = report->state == 2 ? p->connection.ssid : p->ssid;
+	ssid_length = report->state == 2 ? p->connection.ssid_length : p->ssid_length;
+	privacy = report->state == 2 ? p->connection.psk_length != 0 : p->privacy;
+	pin = report->state == 2 ? p->connection.bssid : (p->pinned ? p->associated_bssid : NULL);
+	signal = (s32)le32_to_cpu(report->signal);
+	if (report->ssid_length != ssid_length || memcmp(report->ssid, ssid, ssid_length) ||
+	    !is_valid_ether_addr(report->bssid) || signal < -12700 || signal > 0 ||
+	    (pin && !is_zero_ether_addr(pin) && !ether_addr_equal(pin, report->bssid))) {
+		result = -EINVAL; goto unlock;
+	}
+	ies = (u8 *)(report + 1);
+	for (offset = 0; offset < len; offset += 2 + ies[offset + 1]) {
+		if (offset + 2 > len || offset + 2 + ies[offset + 1] > len) { result = -EINVAL; goto unlock; }
+		if (ies[offset] == WLAN_EID_SSID && (++ssids != 1 || ies[offset + 1] != ssid_length ||
+		    memcmp(ies + offset + 2, ssid, ssid_length))) { result = -EINVAL; goto unlock; }
+		if (ies[offset] == WLAN_EID_RSN && ++rsns > 1) { result = -EINVAL; goto unlock; }
+	}
+	channel = ieee80211_get_channel(radio, le32_to_cpu(report->frequency));
+	if (!channel || ssids != 1 || !(le16_to_cpu(report->capability) & WLAN_CAPABILITY_ESS) ||
+	    !compatible_security(ies, len, privacy, le16_to_cpu(report->capability))) { result = -EINVAL; goto unlock; }
+	bss = cfg80211_inform_bss(radio, channel, CFG80211_BSS_FTYPE_UNKNOWN, report->bssid, 0,
+		le16_to_cpu(report->capability), le16_to_cpu(report->beacon_interval), ies, len, signal, GFP_KERNEL);
+	if (!bss) { result = -ENOMEM; goto unlock; }
+	if (report->state == 1 && !ether_addr_equal(report->bssid, p->associated_bssid)) {
+		ether_addr_copy(p->associated_bssid, report->bssid); p->signal_valid = false;
+		roam.links[0].bss = bss;
+		cfg80211_roamed(p->netdev, &roam, GFP_KERNEL); /* Takes the BSS reference. */
+	} else cfg80211_put_bss(radio, bss);
+unlock:
+	wiphy_unlock(radio);
+out:
+	kfree(report); return result;
+}
+
 static long control(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct lh_priv *p = wiphy_priv(radio);
 	struct lh_reader *reader = file->private_data;
 	struct lh_connection_result completion;
 	struct lh_signal signal;
+	struct lh_link link = {};
 	u32 sequence;
 	long result = 0;
 	if (!capable(CAP_NET_ADMIN)) return -EPERM;
+	if (cmd == LH_REPORT_LINK) return report_link(p, arg);
 	if (cmd == LH_SIGNAL && copy_from_user(&signal, (void __user *)arg, sizeof(signal))) return -EFAULT;
 	if (cmd == LH_CONNECTION_RESULT && copy_from_user(&completion, (void __user *)arg, sizeof(completion))) return -EFAULT;
 	if ((cmd == LH_FINISH_SCAN || cmd == LH_ABORT_SCAN) &&
@@ -248,6 +388,8 @@ static long control(struct file *file, unsigned int cmd, unsigned long arg)
 	} else if (cmd == LH_CONNECTION_RESULT) {
 		if (!p->connection.operation || completion.sequence != p->connection.sequence) result = -ESTALE;
 		else if (p->connection.operation == 1 && !le16_to_cpu(completion.status) && !is_valid_ether_addr(completion.bssid)) result = -EINVAL;
+		else if (p->connection.operation == 1 && !le16_to_cpu(completion.status) &&
+			 !is_zero_ether_addr(p->connection.bssid) && !ether_addr_equal(completion.bssid, p->connection.bssid)) result = -EINVAL;
 		else finish_connection(p, le16_to_cpu(completion.status), completion.bssid);
 	} else if (cmd == LH_SIGNAL) {
 		if (signal.reserved || signal.signal > 0 || signal.signal < -127) result = -EINVAL;
@@ -258,8 +400,16 @@ static long control(struct file *file, unsigned int cmd, unsigned long arg)
 			p->signal_valid = true;
 		}
 	} else if (cmd == LH_GET_CAPABILITIES) {
-		sequence = LH_CAP_REQUEST_POLL;
+		sequence = LH_CAP_REQUEST_POLL | LH_CAP_HOST_LINK;
 		if (copy_to_user((void __user *)arg, &sequence, sizeof(sequence))) result = -EFAULT;
+	} else if (cmd == LH_GET_LINK) {
+		link.sequence = cpu_to_le32(p->connection_sequence);
+		link.flags = (p->connected ? LH_LINK_CONNECTED : 0) | (p->privacy ? LH_LINK_PRIVATE : 0) |
+			(p->pinned ? LH_LINK_PINNED : 0) | (p->connection.operation ? LH_LINK_BUSY : 0);
+		link.ssid_length = p->ssid_length;
+		memcpy(link.ssid, p->ssid, sizeof(link.ssid));
+		ether_addr_copy(link.bssid, p->associated_bssid);
+		if (copy_to_user((void __user *)arg, &link, sizeof(link))) result = -EFAULT;
 	} else result = -ENOTTY;
 	wiphy_unlock(radio);
 	return result;
@@ -475,6 +625,8 @@ static int __init lh_init(void)
 	radio->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 	radio->cipher_suites = ciphers;
 	radio->n_cipher_suites = ARRAY_SIZE(ciphers);
+	/* macOS selects BSSes. Explicit BSSID constraints are still enforced. */
+	radio->flags |= WIPHY_FLAG_SUPPORTS_FW_ROAM;
 	wiphy_ext_feature_set(radio, NL80211_EXT_FEATURE_4WAY_HANDSHAKE_STA_PSK);
 	radio->bands[NL80211_BAND_2GHZ] = &bands[0];
 	radio->bands[NL80211_BAND_5GHZ] = &bands[1];

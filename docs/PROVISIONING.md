@@ -85,6 +85,8 @@ Wi-Fi request notifications require both the payload's `wifi_bridge.py` and a DK
 
 Wi-Fi radio events separately need the updated `wifi_power.py` and its `wifi_events.py` companion, the existing `python3-gi` dependency and status channel, and the updated frontend. They do not need a new module build. Verify the latest radio-service mode is `Wi-Fi radio host updates: events`; an old frontend works through compatibility refresh. Follow the [radio update and test procedure](DEVELOPMENT.md#updating-wi-fi-radio-synchronization), verifying a wired host route before off/on tests. The scan bridge's kernel-notification mode and the radio service's host-event mode are independent checks.
 
+Host AP selection and roaming reports additionally require the matching `wifi_bridge.py`, `wifi_scan.py`, `wifi_link.py`, `wifi_events.py` and rebuilt `linuxhost-wifi` module. The payload includes the companion files; do not copy only the main script. Verify the bridge logs `Wi-Fi association: host BSS selection and link reports` and follow the [AP-selection checks](DEVELOPMENT.md#updating-wi-fi-ap-selection-and-link-reports). These reports reuse `wifiRevision` without a new host build or permission. Automatic profiles let macOS select a compatible AP; explicit BSSID pins remain enforced. Open Wi-Fi and WPA2-PSK/CCMP are the supported connection types; enterprise authentication, SAE and required PMF need additional implementation.
+
 Check `ldd` on the staged broker before installation: `libavcodec` and `libavutil` must resolve inside the payload's private library directory, with other dependencies provided by the distro. Do not run the broker as a staging test: its normal job is to connect to the host decoder service.
 
 ## Host placement and launch, when requested

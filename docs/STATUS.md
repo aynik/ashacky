@@ -37,7 +37,13 @@ The reference guest now uses kernel readiness notifications for scan/connect/dis
 
 ## Wi-Fi radio synchronization
 
-The updated frontend and guest radio service are active after a clean VM restart. External macOS power changes update Linux through CoreWLAN notifications, and Linux rfkill changes control host power; both off/on paths passed over Ethernet and the existing network reconnected. An idle sample across three status updates left the radio RPC worker asleep. The owner confirmed fast disconnection through GNOME and eventual reconnection. That attended reconnection exposed repeated association failures: the existing bridge rejects a different BSSID even when macOS reports the requested SSID. This can add substantial delay and needs a separate connection-path fix; the successful event tests do not establish fast association. Missing/stale capability retains one-second host-status refresh. Signal quality remains a separate refinement.
+The updated frontend and guest radio service are active after a clean VM restart. External macOS power changes update Linux through CoreWLAN notifications, and Linux rfkill changes control host power; both off/on paths passed over Ethernet and the existing network reconnected. An idle sample across three status updates left the radio RPC worker asleep. The owner confirmed fast disconnection through GNOME. The slower association observed in that test led to the separate AP-selection update below. Missing/stale capability retains one-second host-status refresh. Signal quality remains a separate refinement.
+
+## Wi-Fi AP selection and roaming
+
+The updated guest module delegates automatic AP selection to macOS and reports the actual associated AP to Linux. An explicit BSSID pin remains strict. The bridge validates the network and supported security before accepting a host-selected AP, and consumes Wi-Fi revision events for subsequent link changes. The five-second signal deadline also reconciles missed link events. The connection contract is open Wi-Fi or WPA2-PSK/CCMP; enterprise authentication, SAE and required PMF are unsupported.
+
+The module and matching guest files are installed. Three rapid off/on cycles reconnected in 2.4–3.7 seconds with matching host/guest APs and no different-BSSID failures; the Wi-Fi packet-path check passed. One cycle still logged transient macOS operation failures before recovering, so these samples do not establish retry-free or guaranteed reconnection latency. Unit and isolated kernel checks cover roaming, generation races, security and explicit-pin enforcement. Physical roaming between APs has not yet been observed with this update.
 
 ## Video limits
 

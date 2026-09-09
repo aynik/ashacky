@@ -20,6 +20,7 @@ class BSS:
     frequency_mhz: int
     signal_mbm: int
     information_elements: bytes
+    open: bool
 
 
 def frequency(band, channel):
@@ -39,6 +40,8 @@ def frequency(band, channel):
 
 
 def parse_bss(entry):
+    if type(entry.get('open')) is not bool:
+        raise ValueError('Host omitted network security classification')
     network_id = entry['networkID']
     uuid.UUID(network_id)
     ssid = base64.b64decode(entry['ssidBase64'], validate=True)
@@ -69,7 +72,7 @@ def parse_bss(entry):
         offset += 2 + length
     if not ssid_seen:
         ies = bytes([0, len(ssid)]) + ssid + ies
-    return BSS(network_id, ssid, bssid, frequency(entry['channelBand'], entry['channel']), signal * 100, ies)
+    return BSS(network_id, ssid, bssid, frequency(entry['channelBand'], entry['channel']), signal * 100, ies, entry['open'])
 
 
 def agent_rpc(request):
