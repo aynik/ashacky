@@ -6,7 +6,7 @@ The reference installation was tested on an M1 MacBook Air, macOS 15.7.3, Debian
 
 - Direct Linux desktop after macOS login; Finder and Dock absent.
 - Linux logout → macOS logout; coordinated power operations.
-- Sleep/wake and bidirectional lock/unlock synchronization.
+- Sleep/wake with macOS authentication; Command+L locks macOS and returns directly to Debian after host authentication.
 - Battery/AC status through the standard Linux power-supply interface; charger changes immediately reflected in GNOME.
 - Touch ID for lock-screen authentication.
 - Wi-Fi scan/connect and Bluetooth device control through GNOME.
@@ -20,7 +20,7 @@ The reference installation was tested on an M1 MacBook Air, macOS 15.7.3, Debian
 
 Upstream sources are now pinned submodules with Ashacky patches applied during preparation. Source recipes prepare from pinned inputs. The documented builds cover the guest modules and VA/FFmpeg stack, SPICE/GStreamer, QEMU, render server, frontend and macOS helpers. The assembled runtime passes relocation, dependency, signature, GPU-shader and silent audio checks without a VM. The audit and its limits are recorded in [VALIDATION.md](VALIDATION.md).
 
-The reference installation now runs from this checkout. After the initial directory-permission failure, a second issue produced a black window: the SPICE client disabled GL scanout when built without EGL, even though the Metal frontend supports IOSurface scanout. The frontend now advertises that capability explicitly; the owner confirmed a working Linux desktop. Lock synchronization and host control are now linked into the Ashacky process. Current validation and cleanup are recorded in [VALIDATION.md](VALIDATION.md). Fresh-account and full logout/login acceptance remain separate checks.
+The reference installation now runs from this checkout. After the initial directory-permission failure, a second issue produced a black window: the SPICE client disabled GL scanout when built without EGL, even though the Metal frontend supports IOSurface scanout. The frontend now advertises that capability explicitly; the owner confirmed a working Linux desktop. Native macOS locking and host control are linked into the Ashacky process. Current validation and cleanup are recorded in [VALIDATION.md](VALIDATION.md). Fresh-account and full logout/login acceptance remain separate checks.
 
 ## Audio behavior
 
@@ -33,6 +33,14 @@ Outputs without writable master level and mute retain local software volume. Mic
 ## Launcher exit observation
 
 The active launcher replaces its 200 ms app-exit poll with KVO and a shutdown-only, three-second forced-termination deadline. Thirteen native fixture scenarios passed without opening a VM, desktop window or hardware device. In separate five-second idle samples, the old launcher recorded 256 context switches and the candidate recorded 2; these include framework activity and are not a battery-life benchmark. The reference installation completed a clean VM restart and the owner returned to Debian. The expected launcher remains active, permissions remain allowed and guest services are healthy. Full macOS logout/login and sleep/wake have not been retested for this refinement.
+
+## Direct device and session control
+
+The private `org.ashacky.control` channel carries Wi-Fi, Bluetooth/audio management, power, Touch ID and lock requests over SPICE/virtio-serial. The old SSH control forward and session watcher are removed. GNOME's Lock action and Super+L request the native macOS lock screen through its existing extension. Debian does not open its own lock screen. The bidirectional lock observer, guest execution helper and half-second host lock poll are removed; there is no automatic guest unlock operation.
+
+Eighty-eight source tests, native Swift checks, real Swift/Python interoperability, fresh guest staging and assembled runtime validation pass. The final revision is active after a paired restart and passed device reads, root-only access checks, the restricted power check and broker reconnection. The owner confirmed Command+L works with macOS-only locking; the host log records the request and the updated GNOME extension is active. Services report zero automatic restarts. The menu uses the same tested interception point, but a separate menu test, sleep/wake and PAM Touch ID have not been repeated for this revision. See [validation](VALIDATION.md#direct-control-transport).
+
+Camera alone retains its temporary SSH stream. Camera shared memory is the next transport follow-up; no camera frames are routed through the control channel. Administrative SSH remains available. Other status heartbeats, Wi-Fi signal sampling and Bluetooth reconciliation are unchanged.
 
 ## Bluetooth management behavior
 

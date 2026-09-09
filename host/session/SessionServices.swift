@@ -1,40 +1,14 @@
 import AppKit
 
-/// Own every SSH command started by the app, including the long-lived lock watcher.
-final class SessionCommands {
-    private let lock = NSLock()
-    private var stopped = false
-    private var processes: [ObjectIdentifier: Process] = [:]
-
-    var running: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return !stopped
-    }
-
-    func launch(_ process: Process) throws -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard !stopped else { return false }
-        try process.run()
-        processes[ObjectIdentifier(process)] = process
-        return true
-    }
-
-    func finished(_ process: Process) {
-        lock.lock(); defer { lock.unlock() }
-        processes.removeValue(forKey: ObjectIdentifier(process))
-    }
-
-    func stop() {
-        lock.lock(); defer { lock.unlock() }
-        stopped = true
-        for process in processes.values where process.isRunning { process.terminate() }
-    }
-}
-
 /// Session services share Ashacky's main run loop and macOS application identity.
 @objc(AshackySessionServices) public final class AshackySessionServices: NSObject {
-    private let commands = SessionCommands()
-    private var bridge: Bridge?
+    private var channel: ControlChannel?
+    @objc public var controlWrite: ((Data, @escaping (Bool) -> Void) -> Void)?
+    @objc public var controlFailed: (() -> Void)?
+
+    @objc public func controlOpened() { channel?.close() }
+    @objc public func controlClosed() { channel?.close() }
+    @objc public func controlReceived(_ data: Data) { channel?.receive(data) }
     @objc public var statusChanged: (() -> Void)?
 
     /// Read-only telemetry; power/authentication requests still use authenticated RPC.
@@ -51,24 +25,35 @@ final class SessionCommands {
     }
 
     @objc public func start() throws {
-        let ssh = ProcessInfo.processInfo.environment["ASHACKY_GUEST_SSH"] ?? ""
-        guard ssh.hasPrefix("/"), FileManager.default.fileExists(atPath: ssh) else {
-            throw IPCError.message("ASHACKY_GUEST_SSH must select this installation's guest SSH wrapper")
-        }
-        try Control.start(commands: commands)
+        try Control.start()
         Control.statusChanged = { [weak self] in self?.statusChanged?() }
-        let sync = Bridge(guestSSH: ssh, commands: commands)
-        bridge = sync
-        sync.start()
+        let control = ControlChannel(token: Control.config["token"] as! String)
+        channel = control
+        control.write = { [weak self] data, completion in
+            guard let write = self?.controlWrite else { completion(false); return }
+            write(data, completion)
+        }
+        control.failed = { [weak self] in self?.controlFailed?() }
+        let directory = URL(fileURLWithPath: Control.config["socket"] as! String).deletingLastPathComponent().deletingLastPathComponent()
+        let endpoints = ["host": Control.config["socket"] as! String,
+                         "wifi": directory.appendingPathComponent("wifi-workbench.sock").path,
+                         "bluetooth": directory.appendingPathComponent("bluetooth-workbench.sock").path]
+        control.request = { service, payload, completion in
+            guard let endpoint = endpoints[service] else { completion(["ok": false]); return }
+            // Existing listeners retain their token, active-console and request
+            // validation. Never call their blocking adapters on the main queue.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = (try? requestSocket(endpoint, payload)) ?? ["ok": false, "error": "Host service unavailable"]
+                completion(result)
+            }
+        }
+
     }
 
     @objc public func stop() {
-        bridge?.stop()
-        commands.stop()
+        channel?.close()
+        channel = nil
         Control.stop()
     }
 
-    @objc public static func checkTransitions() {
-        checkSessionTransitions()
-    }
 }

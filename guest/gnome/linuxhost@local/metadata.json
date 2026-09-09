@@ -1,9 +1,9 @@
 {
   "uuid": "linuxhost@local",
   "name": "Host session actions",
-  "description": "Route standard GNOME power and logout actions to the dedicated host session",
+  "description": "Route standard GNOME lock, power and logout actions to the dedicated host session",
   "shell-version": [
     "50"
   ],
-  "version": 1
+  "version": 2
 }

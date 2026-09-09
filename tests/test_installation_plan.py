@@ -26,6 +26,8 @@ class InstallationPlanTests(unittest.TestCase):
             guest = read('guest/etc/linuxhost.json')
             devices = read('guest/etc/ashacky/devices.json')
             self.assertEqual(control['token'], guest['token'])
+            self.assertEqual(guest['hostSocket'], '/run/ashacky-control/host.sock')
+            self.assertNotIn('guestSSH', control)
             self.assertEqual(vm['uuid'], devices['vmUUID'])
             self.assertEqual(vm['macs'][1], devices['wifiMAC'])
             self.assertNotEqual(vm['userID'], guest['userID'])
@@ -40,6 +42,7 @@ class InstallationPlanTests(unittest.TestCase):
             # Logout must not immediately respawn a new VM via KeepAlive.
             session = next((output / 'host/LaunchAgents').glob('*.session.plist'))
             self.assertNotIn('KeepAlive', plistlib.loads(session.read_bytes()))
+            self.assertNotIn('ASHACKY_GUEST_SSH', plistlib.loads(session.read_bytes())['EnvironmentVariables'])
             # The frontend owns permission services; no second app can race its listeners.
             jobs = [plistlib.loads(path.read_bytes()) for path in (output / 'host/LaunchAgents').glob('*.plist')]
             self.assertEqual({job['Label'].rsplit('.', 1)[-1] for job in jobs},

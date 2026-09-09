@@ -1,0 +1,20 @@
+[Unit]
+Description=Ashacky private host control channel
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/local/libexec/ashacky-control
+Restart=always
+RestartSec=3
+RuntimeDirectory=ashacky-control
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/run/ashacky-control
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

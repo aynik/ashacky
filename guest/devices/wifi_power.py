@@ -9,7 +9,7 @@ import struct
 from bluetooth_management import request
 from wifi_events import WiFiEvents
 
-SOCKET = '/run/linuxhost-wifi-test.sock'
+SOCKET = '/run/ashacky-control/wifi.sock'
 RFKILL = struct.Struct('<IBBBB')
 
 

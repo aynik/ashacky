@@ -15,7 +15,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=/run/linuxhost
-RestrictAddressFamilies=AF_UNIX AF_VSOCK AF_NETLINK
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

@@ -5,7 +5,7 @@ import json
 import socket
 import time
 
-DEFAULT_SOCKET = '/run/linuxhost-bluetooth-test.sock'
+DEFAULT_SOCKET = '/run/ashacky-control/bluetooth.sock'
 
 
 def request(payload, path=DEFAULT_SOCKET):

@@ -12,16 +12,16 @@ flowchart TB
   subgraph App[Ashacky.app — one user process]
     Frontend[CocoaSpice / Metal + device services]
     Control[Touch ID, battery and session actions]
-    Sync[Host lock observer]
   end
   Frontend <-->|SPICE Unix socket| QEMU
   QEMU --> Guest[Linux guest]
   Frontend <-->|touch frames / readiness| Input[virtio-serial input port → uinput]
-  Guest <-->|private SSH / Unix socket forwards| Frontend
+  Guest <-->|private SPICE / virtio-serial control| Frontend
+  Guest <-->|temporary camera SSH stream| Frontend
   Guest <-->|control requests| Control
   Control --> Power[Restricted root power helper]
   Control -->|power notifications / heartbeat| Telemetry[virtio-serial status → guest cache → power_supply]
-  Sync <-->|fixed guest session operations| Guest
+  Guest -->|explicit lock request| Control
   Guest <-->|usbredir| USB[Restricted root USB helper]
   Guest --> VA[VA-API driver / decoder broker]
   VA --> VT[VideoToolbox service]
@@ -29,7 +29,7 @@ flowchart TB
   Memory --> VA
 ```
 
-The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. The launcher observes `NSRunningApplication.isTerminated` with KVO, including its initial value to catch an exit before registration. It has no periodic exit timer. On the first stop signal it requests termination and schedules one forced-termination attempt after the remaining three-second grace period; repeated signals cannot extend it, and normal exit cancels the pending work. A clean receipt or supervisor-requested stop reports success; an unexpected exit without a receipt reports failure. The supervisor connects the network backends, starts the video helpers and paused QEMU, then launches Ashacky. It waits for the app's authenticated control endpoint before continuing the guest. It checks for another process using the disk before launch. SSH forwards and both decoder servers belong to this session, with bounded child restarts and cleanup at exit. Host control and SessionSync are linked into the main app and share its run loop, identity and lifetime. Their guest commands are terminated when the app stops. An intentional guest shutdown does not start a new VM.
+The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. The launcher observes `NSRunningApplication.isTerminated` with KVO, including its initial value to catch an exit before registration. It has no periodic exit timer. On the first stop signal it requests termination and schedules one forced-termination attempt after the remaining three-second grace period; repeated signals cannot extend it, and normal exit cancels the pending work. A clean receipt or supervisor-requested stop reports success; an unexpected exit without a receipt reports failure. The supervisor connects the network backends, starts the video helpers and paused QEMU, then launches Ashacky. It waits for the app's authenticated control endpoint before continuing the guest. It checks for another process using the disk before launch. The temporary camera SSH forward and both decoder servers belong to this session, with bounded child restarts and cleanup at exit. Host control is linked into the main app and shares its run loop, identity and lifetime. Lock requests go directly to macOS; there are no host-to-guest lock/unlock commands. An intentional guest shutdown does not start a new VM.
 
 SPICE handles display, cursor, keyboard, audio, clipboard and guest display changes. The frontend creates a borderless display window directly rather than entering a native fullscreen Space after a windowed launch. Its escape shortcut is Control–Option–Shift–F12; a keyboard may require Fn for F12. The source supports two guest outputs; more have not been validated.
 
@@ -48,7 +48,7 @@ SPICE handles display, cursor, keyboard, audio, clipboard and guest display chan
 | Graphics | virtio GPU, VirGL/Venus | Host ANGLE/Metal and Vulkan/MoltenVK stack. Stock guest Mesa; no custom Firefox build. |
 | Video | General VA-API driver | VP9 through VideoToolbox/shared memory; H.264 through the pinned remote FFmpeg decoder. Codec and performance limits are in STATUS.md. |
 
-Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. There is no custom permission window. The application requests undecided permissions through the native macOS prompts, one at a time; granted or denied access is not re-prompted. An explicit `--setup PRIVATE_DIRECTORY` mode can request these permissions before the first VM boot. A normal app open starts the installed session job. Socket names retain their existing protocol compatibility names.
+Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. There is no custom permission window. The application requests undecided permissions through the native macOS prompts, one at a time; granted or denied access is not re-prompted. An explicit `--setup PRIVATE_DIRECTORY` mode can request these permissions before the first VM boot. A normal app open starts the installed session job. The root guest control sockets live in `/run/ashacky-control`; host device sockets retain their compatibility names.
 
 ## Session and privilege boundaries
 
@@ -56,13 +56,28 @@ Power-source changes use `IOPSNotificationCreateRunLoopSource`. The frontend sen
 
 The event channel carries no credentials and accepts no power or authentication commands. Older QEMU configurations, missing channels and expired heartbeats fall back to the authenticated five-second status RPC. This fallback can still delay charger updates. Audio and Bluetooth management use the same event channel as described below.
 
-Host device services, frontend, session supervisor, Touch ID and lock observation run as the dedicated user. Only the network, USB and narrowly scoped power operations require root installation. Those executables and their loaded dependencies must reside in administrator-controlled locations; never point a root LaunchDaemon at mutable checkout scripts.
+Host device services, frontend, session supervisor, Touch ID and screen-lock requests run as the dedicated user. Only the network, USB and narrowly scoped power operations require root installation. Those executables and their loaded dependencies must reside in administrator-controlled locations; never point a root LaunchDaemon at mutable checkout scripts.
 
-Power control authenticates the actual socket peer's UID and executable path and requires the active console account. It permits fixed operations, checks other sessions and rate-limits actions. A clean QMP guest shutdown completes an armed host power/restart/logout action. Lock synchronization observes actual macOS authentication transitions; sleep or service startup alone never authorizes guest unlock. Reverse guest-lock events suppress host-origin echoes.
+Power control authenticates the actual socket peer's UID and executable path and requires the active console account. It permits fixed operations, checks other sessions and rate-limits actions. A clean QMP guest shutdown completes an armed host power/restart/logout action. macOS owns screen locking and authentication. The GNOME extension routes the normal screen-shield lock entry point to `hostctl lock`, covering the menu, Super+L and the ScreenSaver D-Bus request. Debian does not open its own lock screen first. Disabling the extension restores its original method. A host request failure reports an error in GNOME; it does not silently claim the screen is locked.
 
-The guest root agent authenticates local peer credentials and the configured desktop UID. Host-control requests use a fresh per-installation secret. The current guest-management SSH connection pins a dedicated host key and verifies the expected VM UUID before use. Replacing this SSH transport with a versioned virtio-serial control protocol is future work, not a claim about this import.
+The guest root agent authenticates local peer credentials and the configured desktop UID. Device and session control use the private channel described below. Camera alone still uses the pinned SSH key and expected VM UUID; replacing that bulk stream with shared memory is deferred. Administrative SSH remains separate from application transport.
 
 The video service still accepts codec traffic on the private VM network without per-connection authentication. Shared-memory mappings are private to the VM and read-only in the guest, but network binding alone is not sufficient isolation between two test accounts/VMs. Adding an authenticated transport or isolated per-install network is a fresh-install requirement before enabling video in a second account. Do not expose these listeners to the LAN.
+
+## Private control channel
+
+`org.ashacky.control` is a bidirectional SPICE port attached to the existing virtio-serial controller. It carries Wi-Fi, Bluetooth/audio, power, Touch ID and explicit guest-to-host lock requests. Camera pixels, audio samples, decoded video and public status snapshots do not pass through it. There is no network address discovery or SSH connection for control, so changing the host Wi-Fi connection cannot interrupt this path.
+
+`ashacky-control.service` owns the root-only guest port and mode-0600 Unix sockets `host.sock`, `wifi.sock` and `bluetooth.sock` inside `/run/ashacky-control` (0700). Existing root helpers use their existing JSON operations there; desktop users still go through the peer-UID-checked agent and device facade. The udev rule keeps the port root-owned at 0600. The app dispatches to its existing private listeners, retaining active-console checks, field validation, LocalAuthentication and its single permission identity. No guest request may reach the supervisor-only `vm-stopped` operation.
+
+Protocol version 1 uses newline-delimited JSON, a fresh guest nonce and host session UUID, and the existing per-installation token on the private port handshake. Host-control RPC also retains its existing token check. Every later message is bound to that connection's session UUID; request IDs are increasing and replies are correlated independently. Frames are limited to 32 KiB, each output queue to 256 KiB, local guest clients to 32 and host service workers to 16, including workers surviving a disconnect. SPICE writes retain their data until completion, run one at a time and can be cancelled. A stalled write or handshake expires after ten seconds. Local requests expire after 20 seconds for devices or 80 seconds for host authentication; request parsing and response delivery each have a five-second limit. Idle control traffic needs no heartbeat or polling loop.
+
+A channel failure closes pending local calls and starts a fresh handshake through systemd recovery. The transport never retries a lock, power or authentication request automatically. It accepts no unsolicited guest-execution or unlock command from the host. An operation already executed cannot be undone by losing its reply. Reconnecting does not change authentication or desktop state. The old guest lock watcher, host lock/unlock observer and half-second snapshot poll have been removed.
+
+The GNOME lock adapter coalesces repeated lock activations while one request is outstanding. Failure permits a later explicit retry; disabling the extension cancels an undispatched request and restores the previous method without replacing another extension's later override. `disable-lock-screen` must remain false so GNOME exposes its Lock action, and the normal `screensaver` binding includes `'<Super>l'`. The adapter changes the action's destination rather than disabling its UI. macOS must require authentication after locking/sleep; Debian's automatic idle policy is configured independently. Other desktops can bind their Lock action to `hostctl lock`; only GNOME 50 is validated here.
+
+
+See [the coordinated migration procedure](DEVELOPMENT.md#updating-the-private-control-channel). Older apps and guest socket paths require that coordinated update; there is deliberately no SSH fallback for these control operations.
 
 ## Audio management events
 

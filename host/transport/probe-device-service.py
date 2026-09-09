@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Own and recover the configured guest's three SSH device forwards."""
+"""Own and recover the configured guest's temporary camera SSH forward."""
 import fcntl
 import os
 from pathlib import Path
@@ -24,7 +24,7 @@ def main():
             raise SystemExit('Another probe device service is running')
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: STOP.set())
-        names = ('wifi', 'camera', 'bluetooth')
+        names = ('camera',)
         command = ['/bin/bash', str(Path(__file__).with_name('probe-ssh')), '-N',
                    '-o', 'ExitOnForwardFailure=yes',
                    '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3']

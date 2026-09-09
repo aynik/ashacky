@@ -103,7 +103,7 @@ def main():
         ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
          'CameraService.swift', 'HostServices.swift')]]
     host_sources += [ROOT / name for name in ('host/control/Control.swift', 'host/control/PowerObserver.swift',
-        'host/session/SessionSync.swift', 'host/session/SessionServices.swift')]
+        'host/session/ControlChannel.swift', 'host/session/SessionServices.swift')]
     host_object = objects / 'host-services.o'
     run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O', '-whole-module-optimization',
          '-module-name', 'AshackyHost', '-emit-object', '-emit-objc-header',

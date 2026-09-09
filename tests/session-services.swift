@@ -2,25 +2,7 @@ import Foundation
 
 @main enum SessionServiceChecks {
     static func main() throws {
-        checkSessionTransitions()
-
-        // Ending an app session must terminate its watcher and reject late
-        // queued launches, without touching the real host or guest lock state.
-        let commands = SessionCommands()
-        let child = Process()
-        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
-        child.arguments = ["30"]
-        let launched = try commands.launch(child)
-        precondition(launched)
-        commands.stop()
-        let limit = Date().addingTimeInterval(3)
-        while child.isRunning && Date() < limit { Thread.sleep(forTimeInterval: 0.02) }
-        precondition(!child.isRunning, "Session command survived app shutdown")
-        commands.finished(child)
-        let late = Process()
-        late.executableURL = URL(fileURLWithPath: "/usr/bin/true")
-        let launchedLate = try commands.launch(late)
-        precondition(!launchedLate)
+        checkControlChannel()
 
         // Moving control into the GUI process must retain its authentication
         // and clean-shutdown gates. None of these requests performs an action.
@@ -39,6 +21,24 @@ import Foundation
         precondition(legacyStatus["wifiRevision"] == nil)
         precondition(status["token"] == nil && status["powerEnabled"] == nil)
         precondition(!String(decoding: message, as: UTF8.self).contains(Control.config["token"] as! String))
+        // Stub the native operation: validate gates without locking this Mac.
+        let originalLock = Control.lockScreen
+        defer { Control.lockScreen = originalLock }
+        var locks = 0
+        Control.lockScreen = { locks += 1; return true }
+        Control.handle(["action": "lock", "token": "wrong"]) {
+            precondition($0["ok"] as? Bool == false)
+        }
+        precondition(locks == 0)
+        let active = Control.active()
+        Control.handle(["action": "lock", "token": Control.config["token"]!]) {
+            precondition($0["ok"] as? Bool == active)
+        }
+        precondition(locks == (active ? 1 : 0))
+        Control.lockScreen = { false }
+        Control.handle(["action": "lock", "token": Control.config["token"]!]) {
+            precondition($0["ok"] as? Bool == false)
+        }
         Control.pending = "poweroff"
         Control.deadline = Date().addingTimeInterval(60)
         Control.handle(["action": "vm-stopped", "token": "wrong", "clean": true]) {
@@ -50,6 +50,6 @@ import Foundation
         }
         precondition(Control.pending == nil)
         precondition(Control.power("check")["ok"] as? Bool == false)
-        print("Session child cleanup, token validation and clean-shutdown gates passed")
+        print("Direct channel lifecycle, host lock, token validation and clean-shutdown gates passed")
     }
 }

@@ -41,6 +41,8 @@ def arguments(c, network_fds):
         '-device','virtserialport,chardev=lhinput,name=org.linuxhost.input']
     a+=['-chardev','spiceport,id=ashacky-status,name=org.ashacky.status',
         '-device','virtserialport,chardev=ashacky-status,name=org.ashacky.status']
+    a+=['-chardev','spiceport,id=ashacky-control,name=org.ashacky.control',
+        '-device','virtserialport,chardev=ashacky-control,name=org.ashacky.control']
     a+=['-object',f'memory-backend-file,id=video-frames,size=64M,mem-path={runtime}/video-frames.bin,share=on','-device','linuxhost-shmem,memdev=video-frames,addr=0xb']
     if c.get('provisioningISO'):
         a+=['-drive',f'if=none,id=ashacky-seed,format=raw,media=cdrom,readonly=on,file={c["provisioningISO"]}',
@@ -89,7 +91,6 @@ def main():
     for sig in (signal.SIGTERM,signal.SIGINT): signal.signal(sig,lambda *_:globals().__setitem__('STOP',True))
     source=pathlib.Path(__file__).resolve().parents[2]
     services=UserServices({
-        'control-forward':[os.sys.executable,str(source/'host/session/control-forward.py')],
         'device-forwards':[os.sys.executable,str(source/'host/transport/probe-device-service.py')],
         'h264':[str(APP/'MacOS/vtremoted'),'--listen',c['videoBindAddress']+':5557'],
     },env,runtime.parent/'logs')

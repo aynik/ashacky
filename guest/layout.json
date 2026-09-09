@@ -117,12 +117,6 @@
       "owner": "root:root"
     },
     {
-      "source": "guest/libexec/linuxhost-session-sync",
-      "target": "/usr/local/libexec/linuxhost-session-sync",
-      "mode": "0755",
-      "owner": "root:root"
-    },
-    {
       "source": "guest/libexec/linuxhost-video-memory",
       "target": "/usr/local/libexec/linuxhost-video-memory",
       "mode": "0755",
@@ -234,6 +228,30 @@
       "source": "build/guest/decoder-worker-direct-va",
       "target": "/opt/linuxhost-video/bin/decoder-worker-direct-va",
       "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/libexec/ashacky-control",
+      "target": "/usr/local/libexec/ashacky-control",
+      "mode": "0755",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/systemd/system/ashacky-control.service",
+      "target": "/etc/systemd/system/ashacky-control.service",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/udev/70-ashacky-control.rules",
+      "target": "/etc/udev/rules.d/70-ashacky-control.rules",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/gnome/linuxhost@local/hostLock.js",
+      "target": "/usr/share/gnome-shell/extensions/linuxhost@local/hostLock.js",
+      "mode": "0644",
       "owner": "root:root"
     }
   ],

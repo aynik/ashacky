@@ -1,0 +1,232 @@
+#!/usr/bin/python3
+"""Private SPICE/virtio control transport; root Unix ABI, no shell/file RPC."""
+import fcntl
+import hmac
+import json
+import os
+import pathlib
+import selectors
+import socket
+import stat
+import struct
+import time
+import uuid
+
+MAX_FRAME = 32768
+MAX_QUEUE = 262144
+PORT = '/dev/virtio-ports/org.ashacky.control'
+RUNTIME = pathlib.Path('/run/ashacky-control')
+
+
+def encode(value):
+    data = json.dumps(dict(value, version=1), separators=(',', ':'), allow_nan=False).encode()
+    if len(data) > MAX_FRAME:
+        raise ValueError('Control frame too large')
+    return data + b'\n'
+
+
+class Frames:
+    def __init__(self):
+        self.buffer = bytearray()
+
+    def feed(self, data):
+        for part in data.splitlines(keepends=True):
+            self.buffer.extend(part)
+            if len(self.buffer) > MAX_FRAME + 1:
+                raise ValueError('Control frame too large')
+            if self.buffer.endswith(b'\n'):
+                value = json.loads(self.buffer)
+                self.buffer.clear()
+                if not isinstance(value, dict):
+                    raise ValueError('Expected object')
+                yield value
+
+
+class Broker:
+    def __init__(self, fd, token, runtime=RUNTIME):
+        self.fd, self.token, self.runtime = fd, token, runtime
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(fd, selectors.EVENT_READ, 'port')
+        self.frames, self.outgoing = Frames(), bytearray()
+        self.nonce, self.session = str(uuid.uuid4()), None
+        self.hello_deadline = time.monotonic() + 10
+        self.clients, self.pending, self.listeners = {}, {}, []
+        self.counter = 0
+        self.send({'type': 'hello', 'nonce': self.nonce, 'token': token})
+
+    def send(self, value):
+        data = encode(dict(value, **({'session': self.session} if self.session else {})))
+        if len(self.outgoing) + len(data) > MAX_QUEUE:
+            raise ValueError('Control output queue full')
+        if not self.outgoing:
+            self.write_deadline = time.monotonic() + 10
+        self.outgoing.extend(data)
+        self.selector.modify(self.fd, selectors.EVENT_READ | selectors.EVENT_WRITE, 'port')
+
+    def listen(self):
+        self.runtime.mkdir(mode=0o700, exist_ok=True)
+        info = self.runtime.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise PermissionError('Control runtime must be private')
+        for service in ('host', 'wifi', 'bluetooth'):
+            path = self.runtime / (service + '.sock')
+            path.unlink(missing_ok=True)
+            listener = socket.socket(socket.AF_UNIX)
+            listener.bind(str(path))
+            path.chmod(0o600)
+            listener.listen(8)
+            listener.setblocking(False)
+            self.listeners.append(listener)
+            self.selector.register(listener, selectors.EVENT_READ, ('listener', service))
+
+    def accept(self, listener, service):
+        client, _ = listener.accept()
+        _, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        if uid != 0 or len(self.clients) >= 32:
+            client.close()
+            return
+        client.setblocking(False)
+        self.clients[client] = {'service': service, 'frames': Frames(), 'deadline': time.monotonic() + 5,
+                                'output': bytearray(), 'id': None}
+        self.selector.register(client, selectors.EVENT_READ, 'client')
+
+    def close_client(self, client):
+        record = self.clients.pop(client, None)
+        if record is None:
+            return
+        if record['id'] is not None:
+            self.pending.pop(record['id'], None)
+        self.selector.unregister(client)
+        client.close()
+
+    def respond(self, client, payload):
+        record = self.clients.get(client)
+        if record is None:
+            return
+        record['output'] = bytearray(json.dumps(payload, allow_nan=False).encode() + b'\n')
+        record['deadline'] = time.monotonic() + 5
+        self.selector.modify(client, selectors.EVENT_WRITE, 'client')
+
+    def read_client(self, client):
+        record = self.clients[client]
+        data = client.recv(4096)
+        if not data:
+            self.close_client(client)
+            return
+        if record['id'] is not None:
+            raise ValueError('One request per local connection')
+        for value in record['frames'].feed(data):
+            if record['id'] is not None:
+                raise ValueError('One request per local connection')
+            if self.session is None:
+                self.respond(client, {'ok': False, 'error': 'Host control channel unavailable'})
+                return
+            self.counter += 1
+            record['id'] = self.counter
+            record['deadline'] = time.monotonic() + (80 if record['service'] == 'host' else 20)
+            self.pending[self.counter] = client
+            self.send({'type': 'request', 'id': self.counter, 'service': record['service'], 'payload': value})
+
+    def receive(self, value):
+        if type(value.get('version')) is not int or value['version'] != 1:
+            raise ValueError('Unsupported control protocol')
+        if self.session is None:
+            if (value.get('type') != 'welcome' or value.get('nonce') != self.nonce
+                    or not hmac.compare_digest(str(value.get('token', '')), self.token)):
+                raise PermissionError('Invalid host handshake')
+            self.session = str(uuid.UUID(value['session']))
+            # UUIDs emitted by Foundation are uppercase; preserve the wire value.
+            self.session = value['session']
+            print('Private control channel authenticated', flush=True)
+            return
+        if value.get('session') != self.session:
+            raise PermissionError('Stale control session')
+        kind = value.get('type')
+        if kind == 'response':
+            if type(value.get('id')) is not int or not isinstance(value.get('payload'), dict):
+                raise ValueError('Invalid response')
+            client = self.pending.pop(value['id'], None)
+            if client is not None:
+                self.respond(client, value['payload'])
+        else:
+            raise ValueError('Unsupported host message')
+
+    def step(self):
+        now = time.monotonic()
+        deadlines = [c['deadline'] for c in self.clients.values()]
+        if self.session is None:
+            deadlines.append(self.hello_deadline)
+        if self.outgoing:
+            deadlines.append(self.write_deadline)
+        timeout = max(0, min(deadlines) - now) if deadlines else None
+        for key, events in self.selector.select(timeout):
+            source = key.data
+            if source == 'port':
+                if events & selectors.EVENT_READ:
+                    data = os.read(self.fd, 4096)
+                    if not data:
+                        raise EOFError('Host port disconnected')
+                    for value in self.frames.feed(data):
+                        self.receive(value)
+                if events & selectors.EVENT_WRITE and self.outgoing:
+                    try:
+                        count = os.write(self.fd, self.outgoing)
+                        del self.outgoing[:count]
+                    except BlockingIOError:
+                        pass
+                    if not self.outgoing:
+                        self.selector.modify(self.fd, selectors.EVENT_READ, 'port')
+            elif isinstance(source, tuple):
+                self.accept(key.fileobj, source[1])
+            elif source == 'client':
+                client = key.fileobj
+                try:
+                    if events & selectors.EVENT_READ:
+                        self.read_client(client)
+                    if events & selectors.EVENT_WRITE:
+                        record = self.clients[client]
+                        count = client.send(record['output'])
+                        del record['output'][:count]
+                        if not record['output']:
+                            self.close_client(client)
+                except (OSError, ValueError):
+                    self.close_client(client)
+        now = time.monotonic()
+        if self.session is None and now >= self.hello_deadline:
+            raise TimeoutError('Host handshake expired')
+        if self.outgoing and now >= self.write_deadline:
+            raise TimeoutError('Host write stalled')
+        for client, record in list(self.clients.items()):
+            if now >= record['deadline']:
+                self.close_client(client)
+
+    def close(self):
+        self.session = None
+        for client in list(self.clients):
+            self.close_client(client)
+        for listener in self.listeners:
+            listener.close()
+        self.selector.close()
+
+
+def main():
+    if os.geteuid() != 0:
+        raise PermissionError('Control transport requires root')
+    config = json.loads(pathlib.Path('/etc/linuxhost.json').read_text())
+    if not isinstance(config.get('token'), str) or len(config['token']) < 32:
+        raise ValueError('Invalid installation token')
+    RUNTIME.mkdir(mode=0o700, exist_ok=True)
+    lock = os.open(RUNTIME / 'broker.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fd = os.open(PORT, os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOCTTY)
+    broker = Broker(fd, config['token'])
+    try:
+        broker.listen()
+        while True:
+            broker.step()
+    finally:
+        broker.close(); os.close(fd); os.close(lock)
+
+
+if __name__ == '__main__':
+    main()

@@ -27,7 +27,7 @@ Build inside Linux with the target distro's compiler, libc, PAM, libva and kerne
 For the Debian reference, the userspace build/check/staging packages are:
 
 ```sh
-sudo apt install build-essential git patch pkg-config python3 python3-evdev python3-gi dbus-daemon patchelf \
+sudo apt install build-essential git patch pkg-config python3 python3-evdev python3-gi dbus-daemon gjs patchelf \
   libpam0g-dev libjson-c-dev libva-dev libgbm-dev libegl-dev libgles-dev \
   liblz4-dev libzstd-dev
 ```
@@ -159,7 +159,7 @@ Follow DEVELOPMENT.md for guest updates and the clean session stop. Switch the v
 ./ashacky build host --installation /absolute/private/helper-build.json
 ```
 
-The first command compiles VideoToolbox shared decoding. The frontend build links host control, lock synchronization and Wi-Fi/Bluetooth/audio/camera services into the Ashacky executable. There are no standalone SessionSync or LinuxHostControl executables. `check-runtime.py` runs the bundled lock-transition check and tests session-command cleanup, token validation and the clean-shutdown gate without locking/unlocking a real session or performing power actions. It also verifies that Metal's SPICE connection advertises IOSurface scanout even when SPICE was built without EGL. The second command also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
+The first command compiles VideoToolbox shared decoding. The frontend build links host control, native macOS screen locking and Wi-Fi/Bluetooth/audio/camera services into the Ashacky executable. There are no standalone SessionSync or LinuxHostControl executables. `check-runtime.py` tests private-channel framing, authentication, concurrency and reconnection, real Swift/Python interoperability, native lock authorization with a stub and the clean-shutdown gate without locking a real session or performing power actions. The Linux source suite uses GJS for the isolated GNOME lock adapter test; no desktop is opened. It also verifies that Metal's SPICE connection advertises IOSurface scanout even when SPICE was built without EGL. The second command also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
 
 ```json
 {

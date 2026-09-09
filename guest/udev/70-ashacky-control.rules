@@ -1,0 +1,2 @@
+# Only the root control broker may send device or session commands.
+SUBSYSTEM=="virtio-ports", ATTR{name}=="org.ashacky.control", OWNER="root", GROUP="root", MODE="0600"

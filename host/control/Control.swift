@@ -6,6 +6,15 @@ import IOKit.ps
 import Darwin
 import CoreServices
 
+// Keep the native login framework loaded while its function pointer is used.
+private let loginFramework = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/A/login", RTLD_LAZY)
+func lockHostScreen() -> Bool {
+    guard let framework = loginFramework, let symbol = dlsym(framework, "SACLockScreenImmediate") else { return false }
+    let lock = unsafeBitCast(symbol, to: (@convention(c) () -> Void).self)
+    lock()
+    return true
+}
+
 enum Control {
     static var server: UnixServer?
     static var supervisor: UnixServer?
@@ -19,7 +28,7 @@ enum Control {
     static var observers: [NSObjectProtocol] = []
     static var processLock: ServiceProcessLock?
     static var timer: Timer?
-    static var commands: SessionCommands!
+    static var lockScreen: () -> Bool = lockHostScreen
     static var statusChanged: (() -> Void)?
     static var powerObserver: PowerObserver?
     static var enabled: Bool { config["powerEnabled"] as? Bool == true }
@@ -33,17 +42,6 @@ enum Control {
         var request: [String:Any] = ["action":action]
         if let op = operation { request["operation"] = op }
         return (try? requestSocket(config["powerSocket"] as? String ?? "",request)) ?? ["ok":false,"error":"Power helper unavailable"]
-    }
-    static func ssh(_ arguments: [String]) {
-        guard let command = config["guestSSH"] as? String else { return }
-        DispatchQueue.global().async {
-            let p = Process(); p.executableURL=URL(fileURLWithPath:"/bin/bash"); p.arguments=[command]+arguments
-            p.standardInput=FileHandle.nullDevice
-            do {
-                guard try commands.launch(p) else { return }
-                p.waitUntilExit(); commands.finished(p)
-            } catch { NSLog("Guest command could not start: %@",String(describing:error)) }
-        }
     }
     static func request(_ value: [String:Any]) -> [String:Any] {
         let semaphore=DispatchSemaphore(value:0)
@@ -70,6 +68,9 @@ enum Control {
         if action=="status" { reply(status()); return }
         guard active() else { pending=nil; reply(["ok":false,"error":"The Linux macOS session is not active"]); return }
         switch action {
+        case "lock":
+            if lockScreen() { reply(["ok": true]); NSLog("Host lock requested from Linux") }
+            else { reply(["ok": false, "error": "macOS screen locking is unavailable"]) }
         case "powercheck": reply(power("check",operation:"poweroff"))
         case "sleep":
             let check=power("check",operation:"sleep")
@@ -117,8 +118,7 @@ enum Control {
         default: reply(["ok":false,"error":"Unsupported action"])
         }
     }
-    static func start(commands: SessionCommands) throws {
-        self.commands = commands
+    static func start() throws {
         let path=ProcessInfo.processInfo.environment["LINUXHOST_CONTROL_CONFIG"] ?? ""
         let data=try Data(contentsOf:URL(fileURLWithPath:path))
         guard let value=try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw IPCError.message("Invalid control configuration") }
@@ -138,9 +138,9 @@ enum Control {
             return request(value)
         }
         let center=NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;statusChanged?();ssh(["loginctl","lock-sessions"]) })
+        observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;statusChanged?() })
         observers.append(center.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { _ in sleeping=false;wake+=1;statusChanged?() })
-        observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;statusChanged?();ssh(["loginctl","lock-sessions"]) })
+        observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;statusChanged?() })
         observers.append(center.addObserver(forName:NSWorkspace.sessionDidBecomeActiveNotification,object:nil,queue:.main) { _ in statusChanged?() })
         powerObserver=PowerObserver { statusChanged?() }
         if powerObserver == nil { NSLog("Power notifications unavailable; status heartbeat remains active") }

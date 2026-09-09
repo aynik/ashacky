@@ -71,11 +71,10 @@ def generate(c, destination):
     while macs[0] == macs[1]:
         macs[1] = '02:' + ':'.join(f'{byte:02x}' for byte in secrets.token_bytes(5))
     owner = c['hostUser'] + ':' + c['group']
-    ssh = str(checkout / 'host/transport/probe-ssh')
     env = {'LINUXHOST_SESSION_CONFIG': str(base / 'transport.json'),
            'LINUXHOST_CONTROL_CONFIG': str(base / 'control.json'),
-           'ASHACKY_GUEST_SSH': ssh, 'ASHACKY_PYTHON': c['hostPython']}
-    control = {'socket': str(base / 'runtime/host.sock'), 'token': token, 'guestSSH': ssh,
+           'ASHACKY_PYTHON': c['hostPython']}
+    control = {'socket': str(base / 'runtime/host.sock'), 'token': token,
                'powerEnabled': False, 'powerSocket': str(runtime / 'power/power.sock')}
     vm = {'userID': uid, 'uuid': identity, 'diskSerial': 'ashacky-' + secrets.token_hex(8),
           'name': 'Ashacky', 'cpus': c['cpus'], 'memory': c['memoryMiB'],
@@ -139,7 +138,7 @@ def generate(c, destination):
     network += ' wifi) interface=$(' + q(root / 'wifi-interface') + '); set -- --vmnet-mode=bridged "--vmnet-interface=$interface" ' + q(runtime / 'network/wifi.sock') + ' ;;\n *) exit 2 ;;\nesac\n'
     network += 'exec ' + q(root / 'socket_vmnet') + ' --socket-group=' + q(c['group']) + ' "$@"\n'
     write('host/root/network.sh', network, str(root / 'network.sh'), 0o755, 'root:wheel')
-    js('guest/etc/linuxhost.json', {'userID': c['guestUID'], 'token': token, 'hostSocket': '/run/linuxhost-host.sock'}, '/etc/linuxhost.json')
+    js('guest/etc/linuxhost.json', {'userID': c['guestUID'], 'token': token, 'hostSocket': '/run/ashacky-control/host.sock'}, '/etc/linuxhost.json')
     js('guest/etc/ashacky/devices.json', {'vmUUID': identity, 'wifiInterface': c['guestWifiInterface'],
         'wifiMAC': macs[1], 'cameraVideoNumber': 10}, '/etc/ashacky/devices.json')
     write('guest/etc/ashacky/video.env', 'LH_VIDEO_H264_HOST=' + c['hostAddress'] + ':5557\nLH_VIDEO_VP9_HOST=' + c['hostAddress'] + '\n', '/etc/ashacky/video.env')

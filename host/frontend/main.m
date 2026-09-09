@@ -81,6 +81,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (GuestView *)activeView;
 @property(nonatomic,strong) CSPort *inputPort;
 @property(nonatomic,strong) CSPort *statusPort;
+@property(nonatomic,strong) CSPort *controlPort;
 @property(nonatomic,strong) NSTimer *statusHeartbeat;
 - (void)sendStatus;
 @property(nonatomic,strong) NSMutableData *inputReply;
@@ -281,6 +282,17 @@ static CSConnection *displayConnection(NSURL *socketURL) {
   exit(EXIT_FAILURE);
  }
  __weak App *weakSelf=self;
+ self.sessionServices.controlWrite=^(NSData *data, void (^completion)(BOOL)) {
+  CSPort *port=weakSelf.controlPort;
+  if(!port.isOpen) { completion(NO);return; }
+  [port writeData:data completion:completion];
+ };
+ self.sessionServices.controlFailed=^{
+  CSPort *port=weakSelf.controlPort;
+  [port cancelWrites];
+  // Make the guest fail pending calls and reopen with a fresh handshake.
+  if(port.isOpen) [port writeData:[@"{\"version\":1,\"type\":\"reset\"}\n" dataUsingEncoding:NSUTF8StringEncoding]];
+ };
  self.sessionServices.statusChanged=^{ [weakSelf sendStatus]; };
  self.hostServices.audioChanged=^{ [weakSelf sendStatus]; };
  self.hostServices.bluetoothChanged=^{ [weakSelf sendStatus]; };
@@ -410,7 +422,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (void)windowDidResize:(NSNotification *)n { [self resizeDisplay]; }
 - (void)windowDidResignKey:(NSNotification *)n { [self setHostCursorHidden:NO]; for(DisplaySlot *slot in self.slots) if(slot.window==n.object) [slot.view releaseGuestKeys]; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
-- (void)applicationWillTerminate:(NSNotification *)n { [self.statusHeartbeat invalidate];self.statusPort=nil; [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.sessionServices stop]; [self.hostServices stop]; }
+- (void)applicationWillTerminate:(NSNotification *)n { [self.statusHeartbeat invalidate];self.statusPort=nil; [self.controlPort cancelWrites];self.controlPort=nil; [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.sessionServices stop]; [self.hostServices stop]; }
 - (void)spiceConnected:(CSConnection *)c { dispatch_async(dispatch_get_main_queue(), ^{ NSLog(@"SPICE connected");
  c.usbManager.isAutoConnect=NO;
  }); }
@@ -430,9 +442,11 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 - (void)spiceAgentDisconnected:(CSConnection *)c { dispatch_async(dispatch_get_main_queue(), ^{}); }
 - (void)spiceForwardedPortOpened:(CSConnection *)c port:(CSPort *)p { dispatch_async(dispatch_get_main_queue(), ^{
  if ([p.name isEqualToString:@"org.linuxhost.input"]) { NSLog(@"Touch port opened");self.inputPort=p;self.inputReply=[NSMutableData data];p.delegate=self; }
+ if ([p.name isEqualToString:@"org.ashacky.control"]) { self.controlPort=p;[self.sessionServices controlOpened];p.delegate=self; }
  if ([p.name isEqualToString:@"org.ashacky.status"]) { NSLog(@"Host status port opened");self.statusPort=p;p.delegate=self;[self sendStatus]; }
 }); }
 - (void)port:(CSPort *)port didRecieveData:(NSData *)data { dispatch_async(dispatch_get_main_queue(), ^{
+ if(port==self.controlPort) { [self.sessionServices controlReceived:data];return; }
  if(port!=self.inputPort) return;
  [self.inputReply appendData:data];
  NSString *reply=[[NSString alloc] initWithData:self.inputReply encoding:NSUTF8StringEncoding];
@@ -441,15 +455,11 @@ static CSConnection *displayConnection(NSURL *socketURL) {
  if([reply containsString:@"LH_INPUT_READY\n"]) { self.inputReadyUntil=NSProcessInfo.processInfo.systemUptime+3;[self.inputReply setLength:0]; }
  if(self.inputReply.length>256) [self.inputReply setLength:0];
 }); }
-- (void)portDidDisconect:(CSPort *)port { dispatch_async(dispatch_get_main_queue(), ^{if(port==self.statusPort)self.statusPort=nil;if(port!=self.inputPort)return;self.inputReadyUntil=0;self.inputAppliedUntil=0;for(DisplaySlot *slot in self.slots) [slot.view resetTouches];self.inputPort=nil;}); }
+- (void)portDidDisconect:(CSPort *)port { dispatch_async(dispatch_get_main_queue(), ^{if(port==self.controlPort){[port cancelWrites];self.controlPort=nil;[self.sessionServices controlClosed];}if(port==self.statusPort)self.statusPort=nil;if(port!=self.inputPort)return;self.inputReadyUntil=0;self.inputAppliedUntil=0;for(DisplaySlot *slot in self.slots) [slot.view resetTouches];self.inputPort=nil;}); }
 - (void)port:(CSPort *)port didError:(NSString *)error { NSLog(@"SPICE port error: %@",error);[self portDidDisconect:port]; }
 - (void)spiceForwardedPortClosed:(CSConnection *)c port:(CSPort *)p { [self portDidDisconect:p]; }
 @end
 int main(int argc,const char **argv) {
- if(argc==2 && strcmp(argv[1],"--check-session-transitions")==0) {
-  @autoreleasepool { [AshackySessionServices checkTransitions]; }
-  return EXIT_SUCCESS;
- }
  if(argc==2 && strcmp(argv[1],"--check-display-transport")==0) {
   @autoreleasepool {
    if(![CSMain.sharedInstance spiceStart]) return EXIT_FAILURE;
