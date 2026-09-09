@@ -97,3 +97,29 @@ journalctl -u linuxhost-probe-bluetooth.service -b --no-pager
 If the cache is stale or still reports `rpc-poll`, follow the battery channel diagnostics above. If it is fresh and has `bluetoothRevision` but the facade fails, check the companion files and `python3-gi`, root ownership and directory traversal permissions, and the management service/SSH forward before changing macOS permissions. The kernel's Bluetooth rfkill `hard` flag marks backend unavailability; it can expire roughly 15–16 seconds after its last valid feed. The event consumer rejects a revision after 25 seconds without fresh status. These are different health checks: no host heartbeat must not be presented as a deliberate radio-off event. Fresh status plus an unavailable radio points to the facade/module feed; read the Bluetooth entry under `/sys/class/rfkill/` or use the distro's `rfkill` utility.
 
 For recovery, restore only the recorded Bluetooth guest files as a matching set and restart the facade; an older guest also works with the updated frontend. Reverting the Git checkout alone does not restore installed `/opt` files. Any app recovery requires another clean session stop before restoring/rebuilding the canonical bundle. Keep the existing VM, identities, configuration, BlueZ ownership and macOS grants intact.
+
+### Updating Wi-Fi request delivery
+
+Build the candidate module against the intended guest kernel using the guest build recipe, and run `./ashacky check`. The focused tests use private sockets and real Linux pipe readiness; they do not load a module or contact the host. Preserve the installed bridge, DKMS source/build artifacts and receipt before an authorized live update. Install the payload's `wifi_bridge.py` and `linuxhost-wifi` source at their existing manifest paths, root-owned, and record their hashes. No frontend rebuild, status-channel change or macOS permission is needed. The updated bridge can first be restarted against the old module to verify its bounded compatibility path.
+
+For an existing `linuxhost-wifi/0.1.0` registration, rebuild with `dkms build -m linuxhost-wifi -v 0.1.0 -k TARGET_KERNEL --force` and install with the corresponding `dkms install ... --force`; run `depmod -a TARGET_KERNEL`. Do not add a duplicate registration or install the audit `.ko` directly. Rebuild for each intended kernel. The loaded module remains old until a reload or guest reboot.
+
+A live reload briefly removes the virtual Wi-Fi interface. First verify the generated VM UUID and lower-NIC MAC as `probe-devices.py` does, and verify management access uses the independent shared NIC. Check the host's actual network route too: guest management access does not prove the host has Ethernet. Wait for outstanding connection work to finish, then stop only `linuxhost-probe-wifi.service` and `linuxhost-probe-wifi-power.service`. Use `rmmod linuxhost_wifi` without force so `cfg80211` stays loaded, then `modprobe linuxhost_wifi lowerdev=VALIDATED_INTERFACE` and restart those two units. Do not toggle host Wi-Fi or restart all virtual-device services as part of this reload. Alternatively, activate the installed module at the next planned guest boot.
+
+Avoid `modprobe -r linuxhost_wifi` here: it can also unload unused dependencies. In the reference update it removed `cfg80211`, leaving the existing Wi-Fi supplicant unable to reacquire its interface. Restarting `wpa_supplicant.service` and cycling only the virtual interface's NetworkManager managed state restored it. Preserve the independent management NIC and existing profiles; do not reset networking or credentials to recover this condition.
+
+Read-only guest diagnostics:
+
+```sh
+uname -r
+dkms status
+systemctl status linuxhost-probe-wifi.service linuxhost-probe-wifi-power.service --no-pager
+journalctl -u linuxhost-probe-wifi.service -b --no-pager
+nmcli -g GENERAL.STATE,GENERAL.REASON device show lhwifi0
+```
+
+The latest startup should say `Wi-Fi request delivery: kernel notifications`. Persistent `compatibility polling` means the loaded module lacks the advertised readiness bit; check the running kernel, installed DKMS version and whether the module was actually reloaded. Host permissions do not determine this mode. `POLLERR`, `POLLHUP` or an invalid descriptor ends the bridge for systemd recovery. A successful mode check alone does not prove host scanning or association: verify fresh scan results, the existing connection and restart with a pending request. Never print connection ioctl payloads, network profiles or credentials in diagnostics.
+
+The one-second radio synchronization, five-second signal refresh and independent 45/90-second request timeouts remain. Requests also wait while the bridge performs a synchronous host operation. Check idle blocking with discovery closed; repeated scans requested by NetworkManager are real work, not an idle-loop regression.
+
+Recovery restores the recorded bridge and DKMS source, rebuilds/installs that source for the intended kernel and reloads it with the same procedure. Update the private receipt to match. Restoring Git alone leaves installed code and the loaded module unchanged; keep the existing VM, host app and permissions intact.

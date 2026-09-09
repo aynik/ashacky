@@ -5,6 +5,7 @@
 #include <linux/module.h>
 #include <linux/etherdevice.h>
 #include <linux/miscdevice.h>
+#include <linux/poll.h>
 #include <linux/uaccess.h>
 #include <linux/rtnetlink.h>
 #include <linux/if_arp.h>
@@ -31,6 +32,8 @@ struct lh_signal {
 	u8 reserved;
 } __packed;
 #define LH_SIGNAL _IOW('L', 6, struct lh_signal)
+#define LH_GET_CAPABILITIES _IOR('L', 7, __u32)
+#define LH_CAP_REQUEST_POLL BIT(0)
 struct lh_record {
 	__le32 sequence, frequency, signal;
 	__le16 capability, beacon_interval;
@@ -38,6 +41,7 @@ struct lh_record {
 	__le16 ie_length;
 } __packed;
 struct lh_priv {
+	wait_queue_head_t requests;
 	struct wireless_dev wdev;
 	struct net_device *netdev;
 	struct cfg80211_scan_request *scan;
@@ -56,6 +60,14 @@ struct lh_priv {
 	unsigned long signal_updated;
 	struct net_device __rcu *lower;
 	struct notifier_block lower_notifier;
+};
+/* Per-open observation cursors do not consume the actual request. A new
+ * bridge sees pending work again; repeated waits on one fd do not busy-loop
+ * on a request it has already read and is completing or waiting to expire.
+ * Access is serialized by the same wiphy mutex as the pending requests.
+ */
+struct lh_reader {
+	u32 scan, connection;
 };
 static struct wiphy *radio;
 static char *lowerdev;
@@ -134,6 +146,7 @@ static int connect_network(struct wiphy *wiphy, struct net_device *dev,
 		p->connection.psk_length = 32;
 		memcpy(p->connection.psk, sme->crypto.psk, 32);
 	}
+	wake_up_interruptible_poll(&p->requests, EPOLLIN | EPOLLRDNORM);
 	return 0;
 }
 static int disconnect_network(struct wiphy *wiphy, struct net_device *dev, u16 reason)
@@ -144,6 +157,7 @@ static int disconnect_network(struct wiphy *wiphy, struct net_device *dev, u16 r
 		finish_connection(p, WLAN_STATUS_UNSPECIFIED_FAILURE, NULL);
 	p->disconnect_reason = reason;
 	begin_connection(p, 2);
+	wake_up_interruptible_poll(&p->requests, EPOLLIN | EPOLLRDNORM);
 	return 0;
 }
 
@@ -176,6 +190,7 @@ static int start_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request
 	p->scan_deadline = jiffies + 45 * HZ;
 	if (!++p->sequence) ++p->sequence;
 	mod_delayed_work(system_wq, &p->timeout, 45 * HZ);
+	wake_up_interruptible_poll(&p->requests, EPOLLIN | EPOLLRDNORM);
 	return 0;
 }
 static void abort_scan(struct wiphy *wiphy, struct wireless_dev *wdev)
@@ -209,6 +224,7 @@ static const struct cfg80211_ops wireless_ops = {
 static long control(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct lh_priv *p = wiphy_priv(radio);
+	struct lh_reader *reader = file->private_data;
 	struct lh_connection_result completion;
 	struct lh_signal signal;
 	u32 sequence;
@@ -222,11 +238,13 @@ static long control(struct file *file, unsigned int cmd, unsigned long arg)
 	if (cmd == LH_GET_SCAN) {
 		sequence = p->scan ? p->sequence : 0;
 		if (copy_to_user((void __user *)arg, &sequence, sizeof(sequence))) result = -EFAULT;
+		else reader->scan = sequence;
 	} else if (cmd == LH_FINISH_SCAN || cmd == LH_ABORT_SCAN) {
 		if (!p->scan || sequence != p->sequence) result = -ESTALE;
 		else finish_scan(p, cmd == LH_ABORT_SCAN);
 	} else if (cmd == LH_GET_CONNECTION) {
 		if (copy_to_user((void __user *)arg, &p->connection, sizeof(p->connection))) result = -EFAULT;
+		else reader->connection = le32_to_cpu(p->connection.sequence);
 	} else if (cmd == LH_CONNECTION_RESULT) {
 		if (!p->connection.operation || completion.sequence != p->connection.sequence) result = -ESTALE;
 		else if (p->connection.operation == 1 && !le16_to_cpu(completion.status) && !is_valid_ether_addr(completion.bssid)) result = -EINVAL;
@@ -239,6 +257,9 @@ static long control(struct file *file, unsigned int cmd, unsigned long arg)
 			p->signal_updated = jiffies;
 			p->signal_valid = true;
 		}
+	} else if (cmd == LH_GET_CAPABILITIES) {
+		sequence = LH_CAP_REQUEST_POLL;
+		if (copy_to_user((void __user *)arg, &sequence, sizeof(sequence))) result = -EFAULT;
 	} else result = -ENOTTY;
 	wiphy_unlock(radio);
 	return result;
@@ -285,8 +306,39 @@ out:
 	kfree(record);
 	return result;
 }
+static int bridge_open(struct inode *inode, struct file *file)
+{
+	if (!capable(CAP_NET_ADMIN)) return -EPERM;
+	file->private_data = kzalloc(sizeof(struct lh_reader), GFP_KERNEL);
+	if (!file->private_data) return -ENOMEM;
+	return nonseekable_open(inode, file);
+}
+static int bridge_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+static __poll_t bridge_poll(struct file *file, poll_table *wait)
+{
+	struct lh_priv *p = wiphy_priv(radio);
+	struct lh_reader *reader = file->private_data;
+	__poll_t ready = 0;
+	if (!capable(CAP_NET_ADMIN)) return EPOLLERR;
+	/* Register before checking state, so a request arriving between the
+	 * userspace ioctl and this wait cannot be missed. Open fds pin the module
+	 * and therefore the wiphy/waitqueue for the entire poll lifetime.
+	 */
+	poll_wait(file, &p->requests, wait);
+	wiphy_lock(radio);
+	if ((p->scan && p->sequence != reader->scan) ||
+	    (p->connection.operation && le32_to_cpu(p->connection.sequence) != reader->connection))
+		ready = EPOLLIN | EPOLLRDNORM;
+	wiphy_unlock(radio);
+	return ready;
+}
 static const struct file_operations bridge_ops = {
-	.owner = THIS_MODULE, .unlocked_ioctl = control, .write = publish,
+	.owner = THIS_MODULE, .open = bridge_open, .release = bridge_release,
+	.unlocked_ioctl = control, .write = publish, .poll = bridge_poll,
 };
 static struct miscdevice bridge = {
 	.minor = MISC_DYNAMIC_MINOR, .name = "linuxhost-wifi", .mode = 0600,
@@ -427,6 +479,7 @@ static int __init lh_init(void)
 	radio->bands[NL80211_BAND_2GHZ] = &bands[0];
 	radio->bands[NL80211_BAND_5GHZ] = &bands[1];
 	p = wiphy_priv(radio);
+	init_waitqueue_head(&p->requests);
 	INIT_DELAYED_WORK(&p->timeout, scan_timeout);
 	INIT_DELAYED_WORK(&p->connection_timeout, connection_timeout);
 	p->netdev = alloc_netdev(0, "lhwifi%d", NET_NAME_ENUM, ether_setup);

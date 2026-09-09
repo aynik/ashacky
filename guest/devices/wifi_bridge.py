@@ -6,9 +6,12 @@ in memory only; never save or log the request payload.
 """
 import argparse
 import base64
+import errno
 import fcntl
 import json
+import math
 import os
+import select
 import socket
 import struct
 import time
@@ -21,6 +24,35 @@ CONNECTION = struct.Struct('<IBBBB6s32s32s')
 GET_CONNECTION = 0x804E4C04
 CONNECTION_RESULT = 0x40104C05
 SIGNAL = 0x40084C06
+GET_CAPABILITIES = 0x80044C07
+CAP_REQUEST_POLL = 1
+
+
+class RequestWait:
+    """Wait for unread kernel requests; old modules retain the bounded idle poll."""
+    def __init__(self, device):
+        capabilities = bytearray(4)
+        try:
+            fcntl.ioctl(device, GET_CAPABILITIES, capabilities)
+        except OSError as error:
+            if error.errno != errno.ENOTTY:
+                raise
+        self.poller = None
+        if struct.unpack('=I', capabilities)[0] & CAP_REQUEST_POLL:
+            self.poller = select.poll()
+            self.poller.register(device, select.POLLIN)
+        print('Wi-Fi request delivery: ' + ('kernel notifications' if self.poller else 'compatibility polling'), flush=True)
+
+    def wait(self, timeout=None):
+        if self.poller is None:
+            time.sleep(0.1 if timeout is None else min(0.1, max(0, timeout)))
+            return False
+        milliseconds = None if timeout is None else math.ceil(max(0, timeout) * 1000)
+        events = self.poller.poll(milliseconds)
+        for _, flags in events:
+            if flags & (select.POLLERR | select.POLLHUP | select.POLLNVAL):
+                raise OSError(errno.ENODEV, 'Wi-Fi request channel unavailable')
+        return bool(events)
 
 
 def signal_payload(state):
@@ -92,6 +124,7 @@ def serve(path, once=False):
             return reply
 
     with open('/dev/linuxhost-wifi', 'wb', buffering=0) as device:
+        wait = RequestWait(device)
         previous = 0
         next_signal = 0
         while True:
@@ -134,7 +167,10 @@ def serve(path, once=False):
                             fcntl.ioctl(device, SIGNAL, payload)
                     except (OSError, ValueError, RuntimeError):
                         pass  # Kernel expires stale samples; never invent signal.
-                time.sleep(0.1)
+                # The separate five-second signal refresh remains unchanged.
+                # poll() sleeps until a kernel request or that deadline; it is
+                # not a repeated userspace check for work. --once has no timer.
+                wait.wait(None if once else next_signal - time.monotonic())
                 continue
             previous = number
             raw.clear()
