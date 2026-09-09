@@ -1,7 +1,7 @@
 import Foundation
 import CoreAudio
 
-// Host endpoint control only: audio samples continue through UTM/SPICE.
+// Host endpoint control only: audio samples continue through SPICE.
 enum AudioBackend {
     struct Failure: Error { let status: OSStatus }
     static func address(_ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
@@ -58,4 +58,83 @@ enum AudioBackend {
         guard try ids(system, property.mSelector).first == device else { throw Failure(status: kAudioHardwareUnspecifiedError) }
         return try snapshot()
     }
+}
+
+/// Main-queue endpoint notifications. Does not open an audio stream or microphone.
+final class AudioObserver {
+    struct Listener {
+        let object: AudioObjectID
+        var address: AudioObjectPropertyAddress
+        let block: AudioObjectPropertyListenerBlock
+    }
+    private var listeners: [Listener] = []
+    private var devices = Set<AudioObjectID>()
+    private var pending: DispatchWorkItem?
+    private var running = false
+    private let epoch = UUID().uuidString
+    private var generation: UInt64 = 0
+    var changed: (() -> Void)?
+    var revision: String { "\(epoch):\(generation)" }
+
+    func start() throws {
+        running = true
+        do {
+            for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice,
+                             kAudioHardwarePropertyDefaultOutputDevice] {
+                try listen(AudioObjectID(kAudioObjectSystemObject), AudioBackend.address(selector))
+            }
+            try updateDevices()
+        } catch { stop(); throw error }
+    }
+
+    private func listen(_ object: AudioObjectID, _ property: AudioObjectPropertyAddress) throws {
+        var property = property
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.schedule() }
+        let result = AudioObjectAddPropertyListenerBlock(object, &property, .main, block)
+        guard result == noErr else { throw AudioBackend.Failure(status: result) }
+        listeners.append(Listener(object: object, address: property, block: block))
+    }
+
+    private func updateDevices() throws {
+        let current = Set(try AudioBackend.ids(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices))
+        for var listener in listeners where listener.object != kAudioObjectSystemObject && !current.contains(listener.object) {
+            AudioObjectRemovePropertyListenerBlock(listener.object, &listener.address, .main, listener.block)
+        }
+        listeners.removeAll { $0.object != kAudioObjectSystemObject && !current.contains($0.object) }
+        for device in current.subtracting(devices) {
+            // Devices may disappear between enumeration and registration. The
+            // system device-list notification will reconcile that transition.
+            for property in [AudioBackend.address(kAudioObjectPropertyName),
+                             AudioBackend.address(kAudioDevicePropertyDeviceIsAlive),
+                             AudioBackend.address(kAudioDevicePropertyStreams, kAudioDevicePropertyScopeInput),
+                             AudioBackend.address(kAudioDevicePropertyStreams, kAudioDevicePropertyScopeOutput)] {
+                try? listen(device, property)
+            }
+        }
+        devices = current
+    }
+
+    private func schedule() {
+        guard running, pending == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.running else { return }
+            self.pending = nil
+            try? self.updateDevices()
+            self.generation &+= 1
+            self.changed?()
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
+
+    func stop() {
+        running = false
+        pending?.cancel(); pending = nil
+        for var listener in listeners {
+            AudioObjectRemovePropertyListenerBlock(listener.object, &listener.address, .main, listener.block)
+        }
+        listeners.removeAll(); devices.removeAll()
+    }
+
+    deinit { stop() }
 }

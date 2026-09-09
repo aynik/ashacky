@@ -223,7 +223,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 @implementation App
 - (void)sendStatus {
  if(!self.statusPort) return;
- NSData *message=[self.sessionServices statusMessage];
+ NSData *message=[self.sessionServices statusMessageWithAudioRevision:self.hostServices.audioRevision];
  if(message) [self.statusPort writeData:message];
 }
 - (void)setHostCursorHidden:(BOOL)hidden {
@@ -282,6 +282,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
  }
  __weak App *weakSelf=self;
  self.sessionServices.statusChanged=^{ [weakSelf sendStatus]; };
+ self.hostServices.audioChanged=^{ [weakSelf sendStatus]; };
  // Events carry changes immediately; a heartbeat maintains the guest watchdog
  // and recovers the initial snapshot after a display/port reconnect.
  self.statusHeartbeat=[NSTimer scheduledTimerWithTimeInterval:10 repeats:YES block:^(NSTimer *timer) { [weakSelf sendStatus]; }];

@@ -7,10 +7,11 @@ routing for concurrent applications. Host audio remains authoritative on hotplug
 import argparse
 import hashlib
 import json
-import signal
+import os
 import subprocess
 import time
 from bluetooth_management import request
+from audio_events import AudioEvents
 
 SOCKET = '/run/linuxhost-devices/control.sock'
 TRANSPORT = {'output': 'alsa_output.pci-0000_00_04.0.analog-stereo',
@@ -83,65 +84,112 @@ def spawn(device, direction):
                             stdout=subprocess.DEVNULL, stderr=None)
 
 
-def run(duration):
-    children = {}
-    observed = {}
-    observed_levels = {}
-    original = defaults(dump())
-    deadline = time.monotonic() + duration if duration else float("inf")
-    try:
-        while time.monotonic() < deadline:
-            try:
-                state = request({'action': 'audio-devices'}, SOCKET)
-                records = {(node_name(d['uid'], direction)): (d, direction)
-                           for d in state['devices'] for direction in KIND if d[direction]}
-                for name in list(children):
-                    if name not in records or children[name].poll() is not None:
-                        stop(children.pop(name))
-                for name, (device, direction) in records.items():
-                    if name not in children:
-                        children[name] = spawn(device, direction)
-                objects = dump()
-                current = defaults(objects)
-                for direction, kind in KIND.items():
-                    key = 'default.configured.audio.' + kind
-                    selected = current.get(key)
-                    # Only an observed user change requests a host change. Startup
-                    # and host hotplug synchronize the UI from the actual host.
-                    if direction in observed and selected != observed[direction] and selected in records:
-                        device, actual_direction = records[selected]
-                        if actual_direction == direction:
-                            state = request({'action': 'audio-select', 'direction': direction,
-                                             'uid': device['uid']}, SOCKET)
-                    active = next((d for d in state['devices'] if d['default' + direction.title()]), None)
-                    if active:
-                        wanted = node_name(active['uid'], direction)
-                        if selected != wanted and set_default(wanted, objects):
-                            selected = wanted
-                    observed[direction] = selected
-                    if selected in records:
-                        prepare_transport(selected, direction, objects, observed_levels)
-            except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
-                print('Audio synchronization unavailable:', type(error).__name__, flush=True)
-                # Remove stale host choices when transport/authorization is lost.
-                for process in children.values():
-                    stop(process)
-                children.clear()
-                observed.clear()
-                observed_levels.clear()
-            time.sleep(1)
-    finally:
+class AudioBridge:
+    def __init__(self):
+        self.children = {}
+        self.child_watches = {}
+        self.observed = {}
+        self.observed_levels = {}
+        self.pending_defaults = {}
+        self.original = None
+        self.state = None
+        self.events = AudioEvents(self.reconcile)
+
+    def child_exited(self, pid, status, name, process):
+        process.returncode = os.waitstatus_to_exitcode(status)
+        self.child_watches.pop(name, None)
+        if self.children.get(name) is process:
+            self.children.pop(name)
+            self.events.retry()
+
+    def stop_child(self, name):
+        watch = self.child_watches.pop(name, None)
+        if watch:
+            self.events.GLib.source_remove(watch)
+        stop(self.children.pop(name))
+
+    def reconcile(self):
+        if not self.events.graph.ready:
+            return
         try:
-            current_objects = dump()
-            current = defaults(current_objects)
+            objects = self.events.snapshot()
+            if self.original is None:
+                self.original = defaults(objects)
+            if self.events.host_dirty or self.state is None:
+                self.state = request({'action': 'audio-devices'}, SOCKET)
+                self.events.host_dirty = False
+            state = self.state
+            records = {node_name(d['uid'], direction): (d, direction)
+                       for d in state['devices'] for direction in KIND if d[direction]}
+            for name in list(self.children):
+                if name not in records:
+                    self.stop_child(name)
+            for name, (device, direction) in records.items():
+                if name not in self.children:
+                    process = spawn(device, direction)
+                    self.children[name] = process
+                    self.child_watches[name] = self.events.GLib.child_watch_add(
+                        self.events.GLib.PRIORITY_DEFAULT, process.pid, self.child_exited, name, process)
+            current = defaults(objects)
             for direction, kind in KIND.items():
                 key = 'default.configured.audio.' + kind
-                if (current.get(key) or '').startswith('linuxhost.'):
-                    set_default(original.get(key) or TRANSPORT[direction], current_objects)
+                selected = current.get(key)
+                pending = self.pending_defaults.get(direction)
+                if pending:
+                    before, wanted, deadline = pending
+                    if selected == before and time.monotonic() < deadline:
+                        # A graph event can arrive before our metadata write is
+                        # observed. Do not mistake the old default for user input.
+                        continue
+                    self.pending_defaults.pop(direction, None)
+                if direction in self.observed and selected != self.observed[direction] and selected in records:
+                    device, actual_direction = records[selected]
+                    if actual_direction == direction:
+                        state = request({'action': 'audio-select', 'direction': direction,
+                                         'uid': device['uid']}, SOCKET)
+                        self.state = state
+                active = next((d for d in state['devices'] if d['default' + direction.title()]), None)
+                if active:
+                    wanted = node_name(active['uid'], direction)
+                    if selected != wanted and set_default(wanted, objects):
+                        self.pending_defaults[direction] = (selected, wanted, time.monotonic() + 2)
+                        self.events.graph.dirty_metadata.update(self.events.graph.metadata)
+                        self.events.later('defaults', 100, self.events.notify)
+                        self.events.later('defaults-deadline', 2100, self.events.notify)
+                        selected = wanted
+                self.observed[direction] = selected
+                if selected in records:
+                    prepare_transport(selected, direction, objects, self.observed_levels)
+        except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            print('Audio synchronization unavailable:', type(error).__name__, flush=True)
+            for name in list(self.children):
+                self.stop_child(name)
+            self.state = None
+            self.observed.clear()
+            self.observed_levels.clear()
+            self.pending_defaults.clear()
+            self.events.retry()
+
+    def run(self, duration):
+        try:
+            self.events.run(duration)
         finally:
-            # A dead PipeWire server must not leave child processes behind.
-            for process in children.values():
-                stop(process)
+            self.events.close()
+            try:
+                if self.original is not None:
+                    objects = dump()
+                    current = defaults(objects)
+                    for direction, kind in KIND.items():
+                        key = 'default.configured.audio.' + kind
+                        if (current.get(key) or '').startswith('linuxhost.'):
+                            set_default(self.original.get(key) or TRANSPORT[direction], objects)
+            finally:
+                for name in list(self.children):
+                    self.stop_child(name)
+
+
+def run(duration):
+    AudioBridge().run(duration)
 
 
 def stop(process):
@@ -160,10 +208,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if not 0 <= args.duration <= 3600:
         parser.error('duration must be 0 (service) or 1..3600 seconds')
-    def terminate(*_):
-        raise KeyboardInterrupt
-    signal.signal(signal.SIGTERM, terminate)
-    try:
-        run(args.duration)
-    except KeyboardInterrupt:
-        pass
+    run(args.duration)

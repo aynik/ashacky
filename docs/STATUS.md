@@ -21,6 +21,12 @@ Upstream sources are now pinned submodules with Ashacky patches applied during p
 
 The reference installation now runs from this checkout. After the initial directory-permission failure, a second issue produced a black window: the SPICE client disabled GL scanout when built without EGL, even though the Metal frontend supports IOSurface scanout. The frontend now advertises that capability explicitly; the owner confirmed a working Linux desktop. Lock synchronization and host control are now linked into the Ashacky process. Current validation and cleanup are recorded in [VALIDATION.md](VALIDATION.md). Fresh-account and full logout/login acceptance remain separate checks.
 
+## Audio behavior
+
+Host device hotplug and Linux endpoint selection now use notifications instead of the normal one-second polling loop. The reference output connect/disconnect, selection and sound checks passed; input-device hotplug with this update remains an attended check. An older frontend or stale event channel retains compatibility polling.
+
+macOS output volume and the Linux virtual endpoint volume remain separate controls. The owner requested linking them as a later refinement; this event-delivery change does not synchronize their levels.
+
 ## Video limits
 
 The retained general VA-API path supports the tested H.264 and VP9 cases. VP9 shared-memory output substantially improved 1080p60 playback. mpv works with `vaapi-copy`; occasional fullscreen 4K60 drops remain possible. Firefox 4K60 is not reliable and may fall back to software or drop many frames. Software support for a codec does not imply host hardware acceleration: do not advertise HEVC, AV1 or VP8 as completed accelerated paths.

@@ -39,7 +39,7 @@ SPICE handles display, cursor, keyboard, audio, clipboard and guest display chan
 | --- | --- | --- |
 | Wi-Fi | cfg80211 module, NetworkManager | CoreWLAN scans/connection management; packets use a dedicated bridged virtio NIC. Management networking uses a second, shared NIC. No monitor mode. |
 | Bluetooth | BlueZ-compatible D-Bus service and rfkill | Host pairs/connects devices. Host handles HID and audio traffic. General guest Bluetooth protocol traffic is not implemented. |
-| Audio | SPICE HDA and PipeWire sinks/sources | Selecting a Linux endpoint changes the host default device. Multiple names share one SPICE transport; they are not independent per-application physical routes. |
+| Audio | SPICE HDA and PipeWire sinks/sources | CoreAudio notifications invalidate the host device list; PipeWire events report Linux selection/volume changes. Multiple names share one SPICE transport; they are not independent per-application physical routes. |
 | Webcam | v4l2loopback | Host camera capture runs on guest demand. Depends on macOS camera authorization. |
 | Trackpad | Type-B multitouch uinput device | NSTouch frames travel through a SPICE port. Readiness and timeout behavior preserve normal pointer fallback. |
 | USB | USB redirection | Active-account storage-only autoattach. Four explicit root ports are essential to the validated hotplug fix. Host input/radio devices are excluded. |
@@ -54,7 +54,7 @@ Linux modules expose virtual interfaces; they are not Asahi physical-device driv
 
 Power-source changes use `IOPSNotificationCreateRunLoopSource`. The frontend sends newline-delimited JSON snapshots (`version: 1`, `status: {...}`) over `org.ashacky.status`, a read-only SPICE/virtio-serial channel. Sleep/wake and session activity also trigger snapshots; a ten-second heartbeat refreshes the existing battery watchdog. The guest agent validates messages, atomically replaces its status cache, and the battery feeder watches that directory with inotify before writing the existing sysfs interface. The kernel emits `power_supply_changed()` for UPower. No new guest kernel ABI or desktop extension is needed.
 
-The event channel carries no credentials and accepts no power or authentication commands. Older QEMU configurations, missing channels and expired heartbeats fall back to the authenticated five-second status RPC. This fallback can still delay charger updates. Audio and Bluetooth management retain their existing one- and two-second refresh loops respectively.
+The event channel carries no credentials and accepts no power or authentication commands. Older QEMU configurations, missing channels and expired heartbeats fall back to the authenticated five-second status RPC. This fallback can still delay charger updates. Bluetooth management retains its existing two-second refresh loop. Audio uses the same event channel as described below.
 
 Host device services, frontend, session supervisor, Touch ID and lock observation run as the dedicated user. Only the network, USB and narrowly scoped power operations require root installation. Those executables and their loaded dependencies must reside in administrator-controlled locations; never point a root LaunchDaemon at mutable checkout scripts.
 
@@ -63,6 +63,14 @@ Power control authenticates the actual socket peer's UID and executable path and
 The guest root agent authenticates local peer credentials and the configured desktop UID. Host-control requests use a fresh per-installation secret. The current guest-management SSH connection pins a dedicated host key and verifies the expected VM UUID before use. Replacing this SSH transport with a versioned virtio-serial control protocol is future work, not a claim about this import.
 
 The video service still accepts codec traffic on the private VM network without per-connection authentication. Shared-memory mappings are private to the VM and read-only in the guest, but network binding alone is not sufficient isolation between two test accounts/VMs. Adding an authenticated transport or isolated per-install network is a fresh-install requirement before enabling video in a second account. Do not expose these listeners to the LAN.
+
+## Audio management events
+
+CoreAudio listeners watch the host device list, default input/output, device names and stream capabilities. They coalesce notification bursts for 50 ms and publish an opaque `audioRevision` through the existing status channel. The token includes an app-lifetime identity, so restarting Ashacky invalidates the guest cache. Device UIDs/names and selection requests stay in the existing authorized management RPC; they are not added to the public status cache. Audio sample transport remains SPICE.
+
+The guest keeps one `pw-dump --monitor --no-colors` process. It handles node changes in memory and queries the default-metadata object only on a metadata event, including key deletion. Temporary client activity and irrelevant node state changes do not cause device queries. GIO watches the host status cache; an audio revision, host session transition or wake triggers a device-list refresh. Loopback child exits trigger recovery. Self-generated default changes are tracked so delayed events cannot be mistaken for a new user choice; mute and zero-volume settings remain under the user's control.
+
+An older frontend with no audio revision, or a stale status stream, retains one-second host-device polling as a compatibility path. PipeWire graph polling is not reintroduced. A failed PipeWire monitor ends the audio client for systemd to restart; transient host errors use a bounded retry interval. These are recovery paths, not ordinary idle refreshes.
 
 ## Video memory ownership
 

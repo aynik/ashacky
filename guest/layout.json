@@ -15,6 +15,12 @@
       "owner": "root:root"
     },
     {
+      "source": "guest/devices/audio_events.py",
+      "target": "/opt/linuxhost-probe/audio_events.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
       "source": "guest/devices/bluetooth_bluez.py",
       "target": "/opt/linuxhost-probe/bluetooth_bluez.py",
       "mode": "0644",

@@ -54,6 +54,14 @@ upower -e
 
 The agent abandons an event stream after 25 seconds without data and attempts the RPC fallback. The feeder accepts cache snapshots up to 20 seconds old; the kernel watchdog marks telemetry unavailable after roughly 30–35 seconds without a valid write. Suspend can pause these timers; verify recovery on wake separately. Loss of telemetry must not be presented as a new charger event.
 
+### Updating audio event delivery
+
+Install `audio_pipewire.py` and its companion `audio_events.py` together from the guest manifest, then restart the guest user's `linuxhost-audio-pipewire.service`. The client requires the distro's PyGObject/GIO bindings (Debian `python3-gi`, already needed by the Bluetooth facade) and PipeWire's `pw-dump`, `pw-loopback` and `wpctl`. The companion must be in the same installed directory as the audio script. Record new and replaced files in the private receipt.
+
+Build and validate the updated frontend before replacing the running app during a clean session stop. Audio reuses `org.ashacky.status`; no additional QEMU port, kernel module or permission is introduced. Until that frontend is active, the new guest client intentionally uses compatibility polling for the host device list.
+
+In the guest, check `audioRevision` in `/run/linuxhost/status.json` and `journalctl --user -u linuxhost-audio-pipewire.service -b`. Healthy native operation logs `Audio host updates: events`; `compatibility polling` means the revision is missing or stale. Confirm one long-lived `pw-dump -m -N` child, with metadata queries only on changes. Check connection/removal of an audio device, default output and input changes in both directions, mute/zero-volume preservation, and user-service restart. Verify actual sound after selection; a correct device list alone does not establish audio routing. Document any fallback or hardware checks that remain untested.
+
 ### Updating an installation with standalone session helpers
 
 The frontend now contains host control and lock synchronization. Updating only the app leaves an old power helper authorizing the removed `LinuxHostControl` executable, so coordinated power actions will fail. During a scheduled clean stop:

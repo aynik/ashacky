@@ -9,6 +9,9 @@ import SystemConfiguration
     let wifi = WiFiService()
     let bluetooth = BluetoothService()
     let camera = CameraService()
+    var audioObserver: AudioObserver?
+    @objc public var audioChanged: (() -> Void)?
+    @objc public var audioRevision: String? { audioObserver?.revision }
     var processLock: ServiceProcessLock?
     var server: UnixServer?
     var permissionFlowStarted = false
@@ -32,6 +35,10 @@ import SystemConfiguration
         try wifi.start(directory: url)
         try bluetooth.start(directory: url)
         try camera.start(directory: url)
+        let audio = AudioObserver()
+        audio.changed = { [weak self] in self?.audioChanged?() }
+        do { try audio.start(); audioObserver = audio }
+        catch { NSLog("Audio notifications unavailable; guest compatibility refresh remains available: %@", String(describing: error)) }
         wifi.authorizationChanged = { [weak self] in self?.advancePermissions() }
         bluetooth.authorizationChanged = { [weak self] in self?.advancePermissions() }
         // Read authorization without opening a camera stream or scanning devices.
@@ -114,6 +121,7 @@ import SystemConfiguration
     }
 
     @objc public func stop() {
+        audioObserver?.stop(); audioObserver = nil
         bluetooth.stop()
         camera.shutdown()
         if let path = ProcessInfo.processInfo.environment["ASHACKY_EXIT_RECEIPT"] {
