@@ -11,6 +11,7 @@ import re
 import signal
 from gi.repository import Gio, GLib
 from bluetooth_management import request, device_operation
+from bluetooth_events import BluetoothEvents
 
 SOCKET = '/run/linuxhost-devices/control.sock'
 ADAPTER = '/org/bluez/hci0'
@@ -111,6 +112,10 @@ class Bridge:
         self.refreshing = False
         self.closed = False
         self.discovery = set()
+        self.refresh_again = False
+        self.radio_state = 0
+        self.radio_key = None
+        self.events = BluetoothEvents(self.refresh, heartbeat=self.heartbeat)
         self.register('/', MANAGER)
         self.register('/org/bluez', AGENTS)
         self.owner_signal = bus.signal_subscribe('org.freedesktop.DBus',
@@ -121,6 +126,7 @@ class Bridge:
         name, old_owner, new_owner = args.unpack()
         if not new_owner:
             self.discovery.discard(name)
+            self.discovery_changed()
             self.agents.pop(name, None)
             if self.default_agent and self.default_agent[0] == name:
                 self.default_agent = None
@@ -168,11 +174,13 @@ class Bridge:
             invocation.return_value(None); return
         if method == 'StopDiscovery':
             self.discovery.discard(sender)
+            self.discovery_changed()
             invocation.return_value(None); return
         if method == 'StartDiscovery':
             self.discovery.add(sender)
+            self.discovery_changed()
             invocation.return_value(None)
-            self.refresh(); return
+            self.refresh(scan=True); return
         actions = {'Connect': 'bluetooth-connect', 'Disconnect': 'bluetooth-disconnect', 'Pair': 'bluetooth-pair'}
         if iface == DEVICE_IFACE and method in actions:
             if self.pending:
@@ -207,31 +215,70 @@ class Bridge:
             if self.closed: return False
             try:
                 result = future.result()
-                if invocation: invocation.return_value(None)
+                if invocation:
+                    invocation.return_value(None)
+                    self.refresh_again = True
                 else: self.update(result)
             except Exception as error:
                 if invocation: invocation.return_dbus_error('org.bluez.Error.Failed', str(error))
-                else: self.update({'devices': [], 'powered': False, 'unavailable': True})
+                else:
+                    self.update({'devices': [], 'powered': False, 'unavailable': True})
+                    self.events.retry()
+            if self.refresh_again:
+                self.refresh_again = False
+                self.events.notify()
+            self.schedule_discovery()
             return False
         future.add_done_callback(lambda _: GLib.idle_add(finished))
 
-    def refresh(self):
-        if not self.refreshing and not self.closed:
-            scan = bool(self.discovery) and not self.pending
-            def read():
-                if scan:
-                    request({'action': 'bluetooth-scan'}, SOCKET)
-                return request({'action': 'bluetooth-devices'}, SOCKET)
-            self.submit(read)
-        return GLib.SOURCE_CONTINUE
+    def refresh(self, scan=False):
+        if self.closed:
+            return
+        if self.refreshing:
+            self.refresh_again = True
+            return
+        if not self.events.active:
+            self.update({'devices': [], 'powered': False, 'unavailable': True})
+            return
+        scan = scan and bool(self.discovery) and not self.pending
+        def read():
+            if scan:
+                request({'action': 'bluetooth-scan'}, SOCKET)
+            return request({'action': 'bluetooth-devices'}, SOCKET)
+        self.submit(read)
 
-    def update(self, state):
+    def schedule_discovery(self):
+        if self.discovery and not self.closed and self.events.active:
+            self.events.later('discovery', 2000, lambda: self.refresh(scan=True))
+
+    def discovery_changed(self):
+        if not self.discovery:
+            self.events.remove_source('discovery')
+        props = self.objects.get(ADAPTER, {}).get(ADAPTER_IFACE, {})
+        value = variant(bool(self.discovery))
+        if props and props.get('Discovering') != value:
+            props['Discovering'] = value
+            self.bus.emit_signal(None, ADAPTER, 'org.freedesktop.DBus.Properties', 'PropertiesChanged',
+                GLib.Variant('(sa{sv}as)', (ADAPTER_IFACE, {'Discovering': value}, [])))
+
+    def heartbeat(self):
+        # Preserve the kernel's 15-second watchdog without fetching devices.
+        # A changed revision needs a fresh RPC before cached radio state is fed.
+        if self.events.key is not None and self.events.key == self.radio_key and self.events.active:
+            self.write_radio()
+
+    def write_radio(self):
         if self.manage_radio and os.geteuid() == 0:
             try:
                 with open('/dev/linuxhost-bt-radio', 'rb', buffering=0) as radio:
-                    fcntl.ioctl(radio, 0x40044c20, struct.pack('I', 0 if state.get('unavailable') else 1 | (2 if state['powered'] else 0)))
+                    fcntl.ioctl(radio, 0x40044c20, struct.pack('I', self.radio_state))
             except OSError:
                 pass  # Optional during private-bus API tests.
+
+    def update(self, state):
+        self.radio_state = 0 if state.get('unavailable') else 1 | (2 if state['powered'] else 0)
+        self.radio_key = self.events.key
+        self.write_radio()
         # Synthetic management-adapter identity, not the host's Bluetooth address.
         adapter = {'Address': '02:4C:48:42:54:01', 'AddressType': 'public',
                    'Name': 'Mac Bluetooth', 'Alias': 'Mac Bluetooth', 'Class': 0,
@@ -261,6 +308,7 @@ class Bridge:
 
     def close(self):
         self.closed = True
+        self.events.close()
         self.bus.signal_unsubscribe(self.owner_signal)
         for registration in self.registrations.values(): self.bus.unregister_object(registration)
         self.pool.shutdown(wait=True)
@@ -288,12 +336,16 @@ if __name__ == '__main__':
         bridge.close()
         raise SystemExit('org.bluez already owned; refusing replacement')
     loop = GLib.MainLoop()
-    bridge.refresh()
-    timer = GLib.timeout_add_seconds(2, bridge.refresh)
+    bridge.events.watch_status()
     if args.duration:
         GLib.timeout_add_seconds(args.duration, lambda: (loop.quit(), False)[1])
-    signal.signal(signal.SIGTERM, lambda *_: loop.quit())
+    try:
+        from gi.repository import GLibUnix
+        add_signal = GLibUnix.signal_add
+    except ImportError:
+        add_signal = GLib.unix_signal_add
+    signal_source = add_signal(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (loop.quit(), True)[1])
     try: loop.run()
     finally:
-        GLib.source_remove(timer)
+        GLib.source_remove(signal_source)
         bridge.close()

@@ -38,11 +38,12 @@ final class SessionCommands {
     @objc public var statusChanged: (() -> Void)?
 
     /// Read-only telemetry; power/authentication requests still use authenticated RPC.
-    @objc public func statusMessage(audioRevision: String?) -> Data? {
+    @objc public func statusMessage(audioRevision: String?, bluetoothRevision: String?) -> Data? {
         var status = Control.status()
         // Only an opaque invalidation token travels in the public telemetry.
         // Device identities and selection keep the existing authorized RPC path.
         if let audioRevision { status["audioRevision"] = audioRevision }
+        if let bluetoothRevision { status["bluetoothRevision"] = bluetoothRevision }
         var data = try? JSONSerialization.data(withJSONObject: ["version": 1, "status": status])
         data?.append(10)
         return data

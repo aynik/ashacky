@@ -27,6 +27,10 @@ Host device hotplug and Linux endpoint selection now use notifications instead o
 
 macOS output volume and the Linux virtual endpoint volume remain separate controls. The owner requested linking them as a later refinement; this event-delivery change does not synchronize their levels.
 
+## Bluetooth management behavior
+
+The native notification path and guest BlueZ event consumer are installed after an authorized clean VM restart. Native event mode, facade restart, radio-watchdog health and the existing audio path passed runtime readback. The owner confirmed fast Bluetooth disconnect/reconnect updates, and the guest trace recorded both connected-state changes promptly after their revision tokens. Fresh pairing, physical host-radio toggles and discovery with new hardware have not been retested with this refinement. The update retains a 60-second reconciliation for external changes that lack a notification, two-second compatibility refresh for old/stale hosts, and bounded operation-status checks while a command is outstanding. Active scans can still delay device-management replies until their bounded inquiry finishes.
+
 ## Video limits
 
 The retained general VA-API path supports the tested H.264 and VP9 cases. VP9 shared-memory output substantially improved 1080p60 playback. mpv works with `vaapi-copy`; occasional fullscreen 4K60 drops remain possible. Firefox 4K60 is not reliable and may fall back to software or drop many frames. Software support for a codec does not imply host hardware acceleration: do not advertise HEVC, AV1 or VP8 as completed accelerated paths.

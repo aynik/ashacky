@@ -72,3 +72,28 @@ The frontend now contains host control and lock synchronization. Updating only t
 4. Start the VM and verify the authenticated control status identifies `local.ashacky.host`. Use the non-destructive `hostctl powercheck` to verify the rebuilt privileged helper accepts the app. Confirm the four device grants, picture/input/audio, USB workers and lock/session behavior before retiring old application permissions. Record the new installed hashes and acceptance results.
 
 The Metal frontend explicitly enables SPICE `gl-scanout`: an EGL-disabled client otherwise does not advertise the IOSurface path. `check-runtime.py` verifies the connection factory without opening a display connection. If QEMU is running but the window is black after an update, check the display log and this capability before changing the guest graphics stack.
+
+### Updating Bluetooth event delivery
+
+Install `bluetooth_bluez.py` and its companion `bluetooth_events.py` together at their guest-manifest paths, preserving root ownership and recording the files in the private receipt. Keep `bluetooth_management.py` alongside them. Restart `linuxhost-probe-bluetooth.service`; it remains compatible with the older frontend through its two-second refresh. The distro's PyGObject/GIO dependency is unchanged (Debian `python3-gi`); use the distro Python selected by the system unit. Test API changes on a private D-Bus before touching the system service; never introduce a second `org.bluez` owner on the live system bus.
+
+Build, assemble and validate a temporary frontend using [the frontend-only recipe](BUILD.md#frontend-only-validation-while-the-vm-runs), then switch it at a clean, attended VM stop. Preserve its bundle/signing identity and native Bluetooth permission. No new app, LaunchAgent, port, QEMU topology or kernel module is required once `org.ashacky.status` is installed.
+
+Check `bluetoothRevision` in `/run/linuxhost/status.json` and `journalctl -u linuxhost-probe-bluetooth.service -b`. Healthy operation logs `Bluetooth host updates: events (60-second reconciliation)`. Read the latest mode: a brief `compatibility polling` message at startup is expected before the first fresh revision arrives; persistent fallback means a missing/stale revision or unavailable host listener registration. The ten-second heartbeat keeps the radio watchdog alive; verify GNOME/rfkill stays available for at least a minute with no device action. The 60-second snapshot is a recovery check, not the normal connection-update latency.
+
+With an owner-selected device, check disconnect/reconnect from the device and from GNOME, state changes in both Settings and the top-bar menu, discovery start/stop, and facade restart. Verify that host input/audio still works afterward. Radio changes made on macOS should appear in Linux; the facade does not add host radio power control. Test pairing with a spare device when available and keep any untested cases explicit. Do not disconnect the user's only pointer. Forgetting a device outside Ashacky can take until the next reconciliation to update its pairing state. A cached discovery entry may remain visible as unpaired until a later scan replaces the discovery cache.
+
+The command-completion wait still checks operation status every half second only during a bounded pair/connect/disconnect attempt. Do not mistake those checks or an open discovery session for the removed idle poll. An active scan still holds the serialized management RPC until the bounded inquiry finishes; measure ordinary connection latency with discovery closed, and record the separate delay during discovery. Check the private host log for permission/registration errors before changing permissions; do not reset TCC or re-enable stock BlueZ to work around a stale cache.
+
+
+For read-only diagnosis, inspect the status cache, the latest journal mode and these system units:
+
+```sh
+python3 -m json.tool /run/linuxhost/status.json
+systemctl status linuxhost-agent.service linuxhost-probe-management.service linuxhost-probe-bluetooth.service --no-pager
+journalctl -u linuxhost-probe-bluetooth.service -b --no-pager
+```
+
+If the cache is stale or still reports `rpc-poll`, follow the battery channel diagnostics above. If it is fresh and has `bluetoothRevision` but the facade fails, check the companion files and `python3-gi`, root ownership and directory traversal permissions, and the management service/SSH forward before changing macOS permissions. The kernel's Bluetooth rfkill `hard` flag marks backend unavailability; it can expire roughly 15–16 seconds after its last valid feed. The event consumer rejects a revision after 25 seconds without fresh status. These are different health checks: no host heartbeat must not be presented as a deliberate radio-off event. Fresh status plus an unavailable radio points to the facade/module feed; read the Bluetooth entry under `/sys/class/rfkill/` or use the distro's `rfkill` utility.
+
+For recovery, restore only the recorded Bluetooth guest files as a matching set and restart the facade; an older guest also works with the updated frontend. Reverting the Git checkout alone does not restore installed `/opt` files. Any app recovery requires another clean session stop before restoring/rebuilding the canonical bundle. Keep the existing VM, identities, configuration, BlueZ ownership and macOS grants intact.

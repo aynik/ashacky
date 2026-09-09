@@ -23,6 +23,85 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
     var authorizationChanged: (() -> Void)?
     var scanReply: (([String: Any]) -> Void)?
     var lastClassic: [[String: Any]] = []
+    var changed: (() -> Void)?
+    private let revisionEpoch = UUID().uuidString
+    private var revisionGeneration: UInt64 = 0
+    private var connectNotification: IOBluetoothUserNotification?
+    private var disconnectNotifications: [String: IOBluetoothUserNotification] = [:]
+    private var metadataNotifications: [NSObjectProtocol] = []
+    private var observationsComplete = false
+    private var reportedNotificationFailure = false
+    private var pendingChange: DispatchWorkItem?
+    private var stopped = false
+    var revision: String? {
+        observationsComplete ? "\(revisionEpoch):\(revisionGeneration)" : nil
+    }
+
+    /// Register on the app's main run loop, under its existing Bluetooth grant.
+    /// Connection callbacks report state only; HID/audio still belong to macOS.
+    private func observeConnections() {
+        guard !stopped, CBManager.authorization == .allowedAlways else {
+            observationsComplete = false
+            return
+        }
+        if connectNotification == nil {
+            connectNotification = IOBluetoothDevice.register(forConnectNotifications: self,
+                selector: #selector(deviceConnected(_:device:)))
+        }
+        if metadataNotifications.isEmpty {
+            for name in [kIOBluetoothDeviceNameChangedNotification, kIOBluetoothDeviceServicesChangedNotification] {
+                metadataNotifications.append(NotificationCenter.default.addObserver(
+                    forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                        self?.invalidate()
+                    })
+            }
+        }
+        var connected: [String: IOBluetoothDevice] = [:]
+        for device in (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []) + devices {
+            if device.isConnected(), let address = device.addressString { connected[address] = device }
+        }
+        for address in Array(disconnectNotifications.keys) where connected[address] == nil {
+            disconnectNotifications.removeValue(forKey: address)?.unregister()
+        }
+        for (address, device) in connected where disconnectNotifications[address] == nil {
+            disconnectNotifications[address] = device.register(forDisconnectNotification: self,
+                selector: #selector(deviceDisconnected(_:device:)))
+        }
+        observationsComplete = connectNotification != nil && connected.keys.allSatisfy { disconnectNotifications[$0] != nil }
+        if !observationsComplete && !reportedNotificationFailure {
+            NSLog("Bluetooth connection notifications unavailable; guest compatibility refresh remains available")
+        }
+        reportedNotificationFailure = !observationsComplete
+    }
+
+    @objc private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        DispatchQueue.main.async { [weak self] in self?.invalidate() }
+    }
+
+    @objc private func deviceDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            // Replace a delivered registration even if the device has already
+            // reconnected by the time this queued callback runs.
+            if let address = device.addressString, self.disconnectNotifications[address] === notification {
+                self.disconnectNotifications.removeValue(forKey: address)?.unregister()
+            }
+            self.invalidate()
+        }
+    }
+
+    private func invalidate() {
+        guard !stopped, pendingChange == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.pendingChange = nil
+            self.observeConnections()
+            self.revisionGeneration &+= 1
+            self.changed?()
+        }
+        pendingChange = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+    }
 
     func start(directory: URL) throws {
         processLock = try ServiceProcessLock(path: directory.path + "/bluetooth-workbench.lock")
@@ -45,7 +124,17 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
             central = CBCentralManager(delegate: self, queue: .main)
         }
     }
-    func stop() { finish(); pairing?.stop() }
+    func stop() {
+        finish(); pairing?.stop()
+        stopped = true
+        pendingChange?.cancel(); pendingChange = nil
+        connectNotification?.unregister(); connectNotification = nil
+        for notification in disconnectNotifications.values { notification.unregister() }
+        disconnectNotifications.removeAll()
+        for notification in metadataNotifications { NotificationCenter.default.removeObserver(notification) }
+        metadataNotifications.removeAll()
+        observationsComplete = false
+    }
     static func serviceUUIDs(_ device: IOBluetoothDevice) -> [String] {
         // Report only service records present in macOS's actual SDP cache.
         // These describe the remote device, not guest profile transport support.
@@ -90,6 +179,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
             }
             operation?.removeValue(forKey: "confirmation")
             attempt.replyUserConfirmation(accepted.boolValue)
+            invalidate()
             completion(["ok": true]); return
         }
         if action == "bluetooth-pair" {
@@ -109,6 +199,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
             let id = UUID().uuidString
             operation = ["id": id, "state": "pending"]
             pairingOperationID = id
+            invalidate()
             completion(["ok": true, "operation": operation!])
             if device.isPaired() { finishPairOperation(device, result: 0) }
             else { startPair(device) }
@@ -130,6 +221,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
             let id = UUID().uuidString
             operation = ["id": id, "state": "pending"]
             connectionBusy = true
+            invalidate()
             completion(["ok": true, "operation": operation!])
             connectionQueue.async {
                 let connect = action == "bluetooth-connect"
@@ -139,12 +231,16 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
                     let connected = device.isConnected()
                     self.operation = ["id": id, "state": "complete", "success": result == 0 && connected == connect,
                                       "result": result, "paired": device.isPaired(), "connected": connected]
+                    self.invalidate()
                 }
             }
             return
         }
         guard request.count == 1 else { completion(["ok": false, "error": "Invalid request"]); return }
         if action == "bluetooth-devices" {
+            let previousCapability = observationsComplete
+            observeConnections()
+            if previousCapability != observationsComplete { invalidate() }
             var known = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []
             for device in devices where !known.contains(where: { $0.addressString == device.addressString }) { known.append(device) }
             let records: [[String: Any]] = known.prefix(64).compactMap { device in
@@ -168,6 +264,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         authorizationChanged?()
+        invalidate()
         if central.state != .poweredOn && scanning { finish() }
         beginIfReady()
     }
@@ -177,6 +274,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
             return
         }
         requested = false; scanning = true; lowEnergy.removeAll(); classicCount = 0
+        invalidate()
         scanGeneration += 1
         let generation = scanGeneration
         central.scanForPeripherals(withServices: nil)
@@ -221,6 +319,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
             if !devices.contains(where: { $0.addressString == device.addressString }) { devices.append(device) }
         }
         inquiry = nil
+        invalidate()
         if let reply = scanReply {
             scanReply = nil
             if Self.active(), CBManager.authorization == .allowedAlways, classicResult == 0 {
@@ -233,6 +332,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
         pairingOperationID = nil
         operation = ["id": id, "state": "complete", "success": result == 0 && device?.isPaired() == true,
                      "result": result, "paired": device?.isPaired() ?? false, "connected": device?.isConnected() ?? false]
+        invalidate()
     }
     func startPair(_ device: IOBluetoothDevice) {
         let attempt = IOBluetoothDevicePair(device: device)
@@ -251,10 +351,12 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
         guard let attempt = sender as? IOBluetoothDevicePair, pairing === attempt else { return }
         guard pairingOperationID != nil else { attempt.replyUserConfirmation(false); return }
         operation?["confirmation"] = numericValue
+        invalidate()
     }
     func devicePairingUserPasskeyNotification(_ sender: Any!, passkey: BluetoothPasskey) {
         guard let attempt = sender as? IOBluetoothDevicePair, pairing === attempt else { return }
         if pairingOperationID != nil { operation?["passkey"] = passkey }
+        invalidate()
     }
     func devicePairingPINCodeRequest(_ sender: Any!) {
         // Do not guess legacy PINs. Keep this case explicit until a PIN UI exists.

@@ -14,18 +14,18 @@ A clone made with `--recurse-submodules` already initializes them. Recursive ini
 
 On macOS, Apple's `/usr/bin/python3` may be older than required. Put the chosen Python 3.12+ and `pkg-config` on PATH before invoking `./ashacky`; verify with `./ashacky inventory`. For an Apple Silicon Homebrew installation this normally means adding `/opt/homebrew/bin` to PATH, including in non-interactive SSH build commands. Runtime LaunchAgents must use discovered absolute executable paths.
 
-`./ashacky check` runs on either OS. The two evdev trackpad tests run only on Linux and are reported as skipped on macOS. Linux needs the distro's Python evdev package; a missing Linux dependency remains an error.
+`./ashacky check` runs on either OS. Linux integration tests for evdev, inotify, GIO, PipeWire monitoring and the private Bluetooth bus are reported as skipped on macOS. On Linux, use the distro's Python with its evdev and PyGObject/GIO bindings. Install `dbus-daemon` so the private-bus check runs instead of being skipped; that test uses `dbus-run-session` and never claims the live system bus.
 
 The ANGLE dependency is part of UTM's WebKit fork and can be large. An optional sparse checkout inside `third_party/angle-webkit` can keep only `Source/ThirdParty/ANGLE`, `Configurations` and `Tools/ccache` in its working tree; the recorded commit must remain unchanged.
 
 ## Guest components
 
-Build inside Linux with the target distro's compiler, libc, PAM, libva and kernel headers. The reference build uses `cc`, `make`, `pkg-config`, Python with `evdev`, PAM/json-c development headers, libva/GBM/EGL/GLES development headers, LZ4 and Zstandard development headers. Kernel headers must match the intended kernel; do not ship the compiled module from another guest.
+Build inside Linux with the target distro's compiler, libc, PAM, libva and kernel headers. The reference build/check uses `cc`, `make`, `pkg-config`, Python with `evdev` and PyGObject/GIO, a private D-Bus daemon, PAM/json-c development headers, libva/GBM/EGL/GLES development headers, LZ4 and Zstandard development headers. Kernel headers must match the intended kernel; do not ship the compiled module from another guest.
 
-For the Debian reference, the userspace build/check packages are:
+For the Debian reference, the userspace build/check/staging packages are:
 
 ```sh
-sudo apt install build-essential git patch pkg-config python3 python3-evdev \
+sudo apt install build-essential git patch pkg-config python3 python3-evdev python3-gi dbus-daemon patchelf \
   libpam0g-dev libjson-c-dev libva-dev libgbm-dev libegl-dev libgles-dev \
   liblz4-dev libzstd-dev
 ```
@@ -102,6 +102,29 @@ The individual build stages are `deps`, `render-server`, `qemu`, `network`, `fro
 The app icon source is `host/frontend/assets/Ashacky.png`, a tightly fitted 1024×1024 PNG with transparent corners. Keep the outer background transparent when replacing this asset. The source checker accepts only this specific RGBA icon and rejects embedded EXIF/text metadata; remove that metadata before committing a replacement. The frontend build uses macOS `sips` and `iconutil` to generate the standard icon sizes and package `Ashacky.icns` in the app's Resources directory, with `CFBundleIconFile` selecting it. Replace the source PNG and rebuild `frontend` and the assembled bundle to update the icon.
 
 `check-runtime.py` copies the generated app to a temporary path containing spaces, verifies signatures and all Mach-O dependencies, queries QEMU's devices/HVF/GPU properties, loads the graphics and codec libraries, tests GStreamer with a silent `fakesink`, and creates the Metal shader pipeline. It opens no desktop window, VM, audio device, microphone, camera, network listener or privileged service. This validates relocation and component availability; it does not validate a fresh guest boot.
+
+### Frontend-only validation while the VM runs
+
+After a complete runtime build, a frontend-only change can reuse the existing pinned dependencies in a temporary output directory. From the checkout root, use the same Homebrew installation as the runtime build. The initial PATH below includes the standard Apple Silicon Homebrew location so it also works in a non-interactive SSH shell; adjust that entry if Homebrew is elsewhere.
+
+```sh
+(
+  set -e
+  export PATH="/opt/homebrew/bin:$PATH"
+  ashacky_build_brew="$(brew --prefix)"
+  export PATH="$ashacky_build_brew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  unset PKG_CONFIG_LIBDIR
+  export PKG_CONFIG_PATH="$PWD/build/runtime/prefix/lib/pkgconfig:$PWD/build/runtime/prefix/share/pkgconfig:$ashacky_build_brew/opt/openssl@3/lib/pkgconfig:$ashacky_build_brew/opt/libffi/lib/pkgconfig"
+  test ! -e build/frontend-review
+  python3 tools/build-frontend.py --output build/frontend-review
+  python3 tools/assemble-runtime.py --app build/frontend-review/Ashacky.app
+  python3 tools/check-runtime.py --app build/frontend-review/Ashacky.app
+)
+```
+
+This validates the candidate without replacing or launching the installed app. Do not run the canonical `build-runtime.py frontend` stage against an active runtime. The temporary recipe is for frontend code only: changed dependencies, QEMU or helpers require the corresponding stopped or isolated full build. Use a fresh review directory; inspect any existing one before removing it.
+
+Follow DEVELOPMENT.md for guest updates and the clean session stop. Switch the validated bundle into the installation's existing canonical app path only after the supervisor, QEMU and frontend have stopped and released the disk/app. Start it through the existing session job and LaunchServices launcher. Retain a temporary recovery copy until attended acceptance, then remove it and the temporary review objects and update the private receipt. This adds no permanent runtime version store or additional app identity.
 
 ### Host helpers
 

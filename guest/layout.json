@@ -27,6 +27,12 @@
       "owner": "root:root"
     },
     {
+      "source": "guest/devices/bluetooth_events.py",
+      "target": "/opt/linuxhost-probe/bluetooth_events.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
       "source": "guest/devices/bluetooth_management.py",
       "target": "/opt/linuxhost-probe/bluetooth_management.py",
       "mode": "0644",
