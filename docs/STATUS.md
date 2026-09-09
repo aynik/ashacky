@@ -40,7 +40,7 @@ The private `org.ashacky.control` channel carries Wi-Fi, Bluetooth/audio managem
 
 Eighty-eight source tests, native Swift checks, real Swift/Python interoperability, fresh guest staging and assembled runtime validation pass. The final revision is active after a paired restart and passed device reads, root-only access checks, the restricted power check and broker reconnection. The owner confirmed Command+L works with macOS-only locking; the host log records the request and the updated GNOME extension is active. Services report zero automatic restarts. The menu uses the same tested interception point, but a separate menu test, sleep/wake and PAM Touch ID have not been repeated for this revision. See [validation](VALIDATION.md#direct-control-transport).
 
-Camera alone retains its temporary SSH stream. Camera shared memory is the next transport follow-up; no camera frames are routed through the control channel. Administrative SSH remains available. Other status heartbeats, Wi-Fi signal sampling and Bluetooth reconciliation are unchanged.
+The camera shared-memory cutover below removed the final runtime SSH stream. Administrative SSH remains available. Other status heartbeats, Wi-Fi signal sampling and Bluetooth reconciliation are unchanged.
 
 ## Bluetooth management behavior
 
@@ -64,11 +64,11 @@ The module and matching guest files are installed. Three rapid off/on cycles rec
 
 The installed guest input loop uses data/writability events and independent one-second readiness and held-contact deadlines instead of a fixed 100 ms idle check. Private socket and simulated-time tests cover contact acknowledgement, partial input, stale release, blocked replies, EOF and creation failure without changing the desktop's input path. The owner confirmed normal pointer movement, clicks/drag, two-finger scrolling and pinch after activation. A 15-second live sample fell from 194 to 90 context switches; host heartbeat and actual input contribute to these samples, so they are not pure timer counts. The existing host heartbeat and pointer-fallback gates remain; sleep/wake and forced host-side fallback have not been retested with this refinement.
 
-## Camera demand
+## Camera shared-memory transport
 
-The camera service and usage helper use blocking event waits while idle. Reader demand starts host capture; reader closure stops it and replaces the last image with generated black frames. Loss of the usage monitor or writer wakes the service for recovery. The existing stream lease, cancellation limits and bounded retries remain, as does FFmpeg's internal worker behavior. The usage-event contract is verified with v4l2loopback 0.15.4; other versions require acceptance.
+The installed camera sends pixels through a separate 8 MiB PCI mapping and lifecycle/frame descriptors through private control RPC. Linux applications keep the existing V4L2 interface. Host-owned slots, acknowledgement and generation checks protect frame ownership; reader demand starts capture, explicit stop or the demand lease ends it. The existing video mapping remains separate. The supervisor no longer starts any runtime SSH process, and fresh installs no longer require a guest SSH server or root key for hardware integration.
 
-The updated pair is installed. An 18-second idle sample went from 179 main-loop wakeups and one usage-helper wakeup to zero for both. Two live discard-sink captures delivered host frames and returned to inactive demand; an intentional monitor exit produced one systemd recovery and reaped the old children. No recording was saved. App-specific visual quality and sleep/wake with this refinement remain separate checks.
+The matched frontend, guest files and QEMU topology are active after a clean restart. The owner confirmed the webcam works in an ordinary application. A continuous capture delivered 1,050 frames at 1280×720 in 36.2 seconds including startup, with one stream and no 30-second restart. Closing capture stopped the host and cleared shared memory. An intentional control-broker restart recovered capture without restarting the camera service; the old host capture expired after its five-second lease. Camera and other integration services remain healthy, device permissions remain allowed, and no runtime SSH forward remains. Ninety-two source tests, native memory/interoperability checks, isolated staging and full runtime validation pass. Sleep/wake and additional camera applications have not been retested for this revision; these samples do not establish a performance comparison with SSH or end-to-end zero-copy capture.
 
 ## Video limits
 

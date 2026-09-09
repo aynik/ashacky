@@ -1,16 +1,15 @@
 """Keep V4L2 discoverable while capturing from macOS only on reader demand.
 
 Idle frames are generated black pixels, never cached camera images. This
-prototype uses v4l2loopback 0.15.4's usage event and the private host socket.
+service uses v4l2loopback 0.15.4's usage event and shared camera memory.
 """
 import argparse
 import json
 import signal
-import socket
 import subprocess
 import threading
 import time
-from camera_bridge import frame
+from camera_shared import CameraStream
 
 
 def serve(path, device, monitor_path):
@@ -75,30 +74,22 @@ def serve(path, device, monitor_path):
                 continue
             received = 0
             try:
-                with socket.socket(socket.AF_UNIX) as client:
-                    client.settimeout(5)  # Camera startup can exceed one second.
-                    client.connect(path)
-                    with client.makefile('rb') as stream:
-                        while active.is_set() and not stopping.is_set():
-                            item = frame(stream)
-                            if item is None:
-                                break
-                            w, h, sequence, pixels = item
-                            client.settimeout(1)  # Bound cancellation once streaming.
-                            if (w, h) != (width, height) or sequence != received:
-                                raise ValueError('Unexpected camera format/sequence')
-                            if not active.is_set() or stopping.is_set():
-                                break
-                            writer.stdin.write(pixels)
-                            received += 1
-                            last_error = None
-            except (OSError, ValueError) as error:
+                with CameraStream(path) as stream:
+                    while active.is_set() and not stopping.is_set():
+                        pixels = stream.frame()
+                        if not active.is_set() or stopping.is_set():
+                            break
+                        writer.stdin.write(pixels)
+                        writer.stdin.flush()
+                        received += 1
+                        last_error = None
+            except (OSError, ValueError, RuntimeError) as error:
                 category = type(error).__name__
                 if category != last_error:
                     print(json.dumps({'camera_transport_error': category}), flush=True)
                     last_error = category
             finally:
-                # Closing socket tells the host to stop. Replace the final
+                # Closing the stream requests host stop. Replace the final
                 # camera frame with black instead of leaving a private image.
                 for _ in range(4):
                     writer.stdin.write(black)
@@ -107,7 +98,7 @@ def serve(path, device, monitor_path):
                     print(json.dumps({'camera_stream_frames': received,
                                       'reader_still_active': active.is_set()}), flush=True)
             if active.is_set():
-                stopping.wait(.5)  # Bounded retry / renew 30-second host stream.
+                stopping.wait(.5)  # Bounded recovery after a failed active stream.
     finally:
         stopping.set()
         changed.set()
@@ -130,8 +121,8 @@ def serve(path, device, monitor_path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--socket', default='/run/linuxhost-camera-test.sock')
+    parser.add_argument('--socket', default='/run/ashacky-control/camera.sock')
     parser.add_argument('--device', default='/dev/video10')
-    parser.add_argument('--monitor', default='/root/linuxhost-dev/camera-readers')
+    parser.add_argument('--monitor', default='/opt/linuxhost-probe/camera-readers')
     args = parser.parse_args()
     serve(args.socket, args.device, args.monitor)

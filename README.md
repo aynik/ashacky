@@ -46,7 +46,7 @@ These commands initialize sources, inventory, check or compile components; they 
 | --- | --- |
 | `host/frontend` | Borderless Metal/SPICE display, input, clipboard, audio and monitor handling |
 | `host/session`, `host/control` | VM supervision, host authentication, power coordination and macOS screen locking |
-| `host/devices`, `host/transport` | Host device services; private SPICE control and temporary camera SSH transport |
+| `host/devices`, `host/transport` | Host device services, private SPICE control and optional administrative SSH helpers |
 | `helpers` | Restricted privileged power and USB helpers |
 | `guest/drivers`, `guest/devices`, `guest/input` | Standard Linux device interfaces and management bridges |
 | `guest/auth`, `guest/gnome`, `guest/libexec` | Touch ID PAM and desktop/session integration |

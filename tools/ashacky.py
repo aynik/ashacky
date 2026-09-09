@@ -111,6 +111,7 @@ def build_guest(args):
     def compile(output, sources, flags):
         run([cc, '-O2', *[ROOT / source for source in sources], *flags, '-o', out / output])
     compile('camera-readers', ['guest/devices/camera_readers.c'], [])
+    compile('camera-memory.so', ['host/common/CameraMemory.c'], ['-std=c11', '-shared', '-fPIC'])
     compile('pam_linuxhost.so', ['guest/auth/pam_linuxhost.c'],
             ['-shared', '-fPIC', *pkg('json-c'), '-lpam'])
     from sources import Sources

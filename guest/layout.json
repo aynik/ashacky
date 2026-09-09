@@ -45,12 +45,6 @@
       "owner": "root:root"
     },
     {
-      "source": "guest/devices/camera_bridge.py",
-      "target": "/opt/linuxhost-probe/camera_bridge.py",
-      "mode": "0644",
-      "owner": "root:root"
-    },
-    {
       "source": "guest/devices/camera_demand.py",
       "target": "/opt/linuxhost-probe/camera_demand.py",
       "mode": "0644",
@@ -251,6 +245,18 @@
     {
       "source": "guest/gnome/linuxhost@local/hostLock.js",
       "target": "/usr/share/gnome-shell/extensions/linuxhost@local/hostLock.js",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "guest/devices/camera_shared.py",
+      "target": "/opt/linuxhost-probe/camera_shared.py",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
+      "source": "build/guest/camera-memory.so",
+      "target": "/opt/linuxhost-probe/camera-memory.so",
       "mode": "0644",
       "owner": "root:root"
     }

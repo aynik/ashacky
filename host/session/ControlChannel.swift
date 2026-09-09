@@ -93,7 +93,7 @@ final class ControlChannel {
         switch value["type"] as? String {
         case "request":
             guard let id = integer(value["id"]), id > lastRequest,
-                  let service = value["service"] as? String, ["host", "wifi", "bluetooth"].contains(service),
+                  let service = value["service"] as? String, ["host", "wifi", "bluetooth", "camera"].contains(service),
                   let payload = value["payload"] as? [String: Any], let request else { return false }
             lastRequest = id
             guard payload["action"] as? String != "vm-stopped" else {

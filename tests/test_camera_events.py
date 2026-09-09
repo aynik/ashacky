@@ -16,7 +16,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'guest/devices'))
 import camera_demand
-from camera_bridge import HEADER
+from camera_shared import CameraStream
+from camera_fixture import Host, Memory
 
 
 class CameraEventTests(unittest.TestCase):
@@ -29,25 +30,11 @@ class CameraEventTests(unittest.TestCase):
         output, markers = io.StringIO(), queue.Queue()
         connected, disconnected, done = threading.Event(), threading.Event(), threading.Event()
         black_size = 1280 * 720 * 3 // 2
-        pixels = bytes([90]) * black_size
-        with tempfile.TemporaryDirectory() as directory:
-            endpoint = str(Path(directory) / 'camera.sock')
-            server = socket.socket(socket.AF_UNIX)
-            server.bind(endpoint); server.listen(); server.settimeout(3)
-            def host():
-                try:
-                    client, _ = server.accept()
-                    with client:
-                        client.settimeout(2); connected.set()
-                        sequence = 0
-                        while not done.is_set():
-                            client.sendall(HEADER.pack(b'LHCV0001', 1280, 720, len(pixels), sequence) + pixels)
-                            sequence += 1
-                            done.wait(.02)
-                except (BrokenPipeError, ConnectionResetError):
-                    disconnected.set()
-                except Exception as error:
-                    if not done.is_set(): failures.append(error)
+        memory = Memory()
+        host = Host(memory)
+        endpoint = host.endpoint
+        connected, disconnected = host.connected, host.disconnected
+        try:
             def start(command, **kwargs):
                 if command[0] == 'ffmpeg':
                     code = ('import sys\n'
@@ -68,10 +55,9 @@ class CameraEventTests(unittest.TestCase):
             def serve():
                 try: camera_demand.serve(endpoint, '/no-camera-device', 'usage-fixture')
                 except Exception as error: failures.append(error)
-            host_thread = threading.Thread(target=host)
-            host_thread.start()
             marker_thread = None
-            with patch.object(camera_demand.subprocess, 'Popen', start), \
+            with patch.object(camera_demand, 'CameraStream', lambda path: CameraStream(path, resource=memory.path, library=memory.library)), \
+                    patch.object(camera_demand.subprocess, 'Popen', start), \
                     patch.object(camera_demand.signal, 'signal', lambda number, handler: handlers.__setitem__(number, handler)), \
                     contextlib.redirect_stdout(output):
                 thread = threading.Thread(target=serve)
@@ -105,16 +91,20 @@ class CameraEventTests(unittest.TestCase):
                     self.assertFalse(thread.is_alive())
                     self.assertEqual(failures, [])
                 finally:
-                    done.set(); server.close()
+                    done.set()
                     if signal.SIGTERM in handlers: handlers[signal.SIGTERM](signal.SIGTERM, None)
                     for child in children:
                         if child.poll() is None: child.kill()
                         child.wait(timeout=3)
-                    thread.join(3); host_thread.join(3)
+                    thread.join(3)
                     if marker_thread: marker_thread.join(3)
                     for child in children:
                         for stream in (child.stdin, child.stdout):
                             if stream and not stream.closed: stream.close()
+
+        finally:
+            host.close(); memory.close()
+        self.assertEqual(host.failures, [])
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux camera-service lifecycle')
     def test_idle_stop_and_child_failures_wake_and_reap_without_capture(self):
@@ -140,7 +130,7 @@ class CameraEventTests(unittest.TestCase):
                     except Exception as error: failures.append(error)
                 with patch.object(camera_demand.subprocess, 'Popen', start), \
                         patch.object(camera_demand.signal, 'signal', lambda number, handler: handlers.__setitem__(number, handler)), \
-                        patch.object(camera_demand.socket, 'socket') as connection, contextlib.redirect_stdout(output):
+                        patch.object(camera_demand, 'CameraStream') as connection, contextlib.redirect_stdout(output):
                     thread = threading.Thread(target=serve)
                     thread.start()
                     try:

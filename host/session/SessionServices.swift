@@ -37,7 +37,8 @@ import AppKit
         let directory = URL(fileURLWithPath: Control.config["socket"] as! String).deletingLastPathComponent().deletingLastPathComponent()
         let endpoints = ["host": Control.config["socket"] as! String,
                          "wifi": directory.appendingPathComponent("wifi-workbench.sock").path,
-                         "bluetooth": directory.appendingPathComponent("bluetooth-workbench.sock").path]
+                         "bluetooth": directory.appendingPathComponent("bluetooth-workbench.sock").path,
+                         "camera": directory.appendingPathComponent("camera-workbench.sock").path]
         control.request = { service, payload, completion in
             guard let endpoint = endpoints[service] else { completion(["ok": false]); return }
             // Existing listeners retain their token, active-console and request

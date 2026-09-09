@@ -58,6 +58,20 @@ def main():
             '-o', str(peer)], check=True)
         subprocess.run([sys.executable, str(ROOT / 'tools/check-control.py'), '--peer', str(peer)],
                        check=True, timeout=15)
+        camera_object = temporary / 'camera-memory.o'
+        camera_library = temporary / 'camera-memory.dylib'
+        subprocess.run(['clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-c',
+            str(ROOT / 'host/common/CameraMemory.c'), '-o', str(camera_object)], check=True)
+        subprocess.run(['clang', '-dynamiclib', str(camera_object), '-o', str(camera_library)], check=True)
+        camera_check = temporary / 'camera-check'
+        subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
+            *[str(ROOT / name) for name in ('host/common/IPC.swift', 'host/devices/CameraBuffer.swift', 'tests/camera-memory.swift')],
+            str(camera_object), '-o', str(camera_check)], check=True)
+        camera_memory = temporary / 'camera-frames.bin'
+        with camera_memory.open('wb') as f: f.truncate(8 * 1024 * 1024)
+        subprocess.run([str(camera_check), str(camera_memory)], check=True, timeout=10)
+        subprocess.run([sys.executable, str(ROOT / 'tools/check-camera.py'), '--peer', str(camera_check),
+            '--memory', str(camera_memory), '--library', str(camera_library)], check=True, timeout=15)
         subprocess.run([sys.executable, str(ROOT / 'tools/check-launcher.py'),
             '--launcher', str(contents / 'MacOS/AshackyLauncher')], check=True, timeout=90)
         assert 'hvf' in run('qemu-system-aarch64', '-accel', 'help')

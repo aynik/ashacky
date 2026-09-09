@@ -101,7 +101,7 @@ def main():
     inputs += [gst, ROOT / 'host/frontend/main.m']
     host_sources = [ROOT / 'host/common/IPC.swift', *[ROOT / 'host/devices' / name for name in
         ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
-         'CameraService.swift', 'HostServices.swift')]]
+         'CameraBuffer.swift', 'CameraService.swift', 'HostServices.swift')]]
     host_sources += [ROOT / name for name in ('host/control/Control.swift', 'host/control/PowerObserver.swift',
         'host/session/ControlChannel.swift', 'host/session/SessionServices.swift')]
     host_object = objects / 'host-services.o'
@@ -111,7 +111,9 @@ def main():
          '-emit-module-path', objects / 'AshackyHost.swiftmodule',
          *host_sources, '-o', host_object])
     flags.append('-I' + str(objects))
-    compiled = [host_object]
+    camera_object = objects / 'camera-memory.o'
+    run(['clang', '-std=c11', '-O2', '-c', ROOT / 'host/common/CameraMemory.c', '-o', camera_object])
+    compiled = [host_object, camera_object]
     for index, source in enumerate(inputs):
         obj = objects / f'{index}-{source.stem}.o'
         run(['clang', *flags, '-c', source, '-o', obj])

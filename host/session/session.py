@@ -44,6 +44,7 @@ def arguments(c, network_fds):
     a+=['-chardev','spiceport,id=ashacky-control,name=org.ashacky.control',
         '-device','virtserialport,chardev=ashacky-control,name=org.ashacky.control']
     a+=['-object',f'memory-backend-file,id=video-frames,size=64M,mem-path={runtime}/video-frames.bin,share=on','-device','linuxhost-shmem,memdev=video-frames,addr=0xb']
+    a+=['-object',f'memory-backend-file,id=camera-frames,size=8M,mem-path={runtime}/camera-frames.bin,share=on','-device','linuxhost-shmem,memdev=camera-frames,addr=0xc']
     if c.get('provisioningISO'):
         a+=['-drive',f'if=none,id=ashacky-seed,format=raw,media=cdrom,readonly=on,file={c["provisioningISO"]}',
             '-device','usb-storage,drive=ashacky-seed,bus=usb-bus.0']
@@ -89,9 +90,7 @@ def main():
     env['DYLD_FRAMEWORK_PATH']=str(APP/'Frameworks')
     env['DYLD_FALLBACK_FRAMEWORK_PATH']=str(APP/'Frameworks')+':/System/Library/Frameworks'
     for sig in (signal.SIGTERM,signal.SIGINT): signal.signal(sig,lambda *_:globals().__setitem__('STOP',True))
-    source=pathlib.Path(__file__).resolve().parents[2]
     services=UserServices({
-        'device-forwards':[os.sys.executable,str(source/'host/transport/probe-device-service.py')],
         'h264':[str(APP/'MacOS/vtremoted'),'--listen',c['videoBindAddress']+':5557'],
     },env,runtime.parent/'logs')
     networks=[];children=[];qemu=None;view=None;clean=False;buffer=b''
@@ -116,6 +115,9 @@ def main():
         fd=os.open(runtime/'video-frames.bin',os.O_RDWR|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
         try:os.ftruncate(fd,64*1024*1024)
         finally:os.close(fd)
+        fd=os.open(runtime/'camera-frames.bin',os.O_RDWR|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+        try:os.ftruncate(fd,8*1024*1024)
+        finally:os.close(fd)
         video_env=dict(env,LH_VIDEO_SHMEM=str(runtime/'video-frames.bin'),LH_VIDEO_BIND=c['videoBindAddress'])
         with open(runtime/'video-shared.log','ab',buffering=0) as log:
             video=sp.Popen([str(APP/'MacOS/LinuxHostVideoShared')],env=video_env,stdout=log,stderr=log);children.append(video)
@@ -134,7 +136,7 @@ def main():
         qmp.recv(65536);command('qmp_capabilities');qmp.recv(65536)
         with open(runtime/'display.log','ab',buffering=0) as log:
             view=sp.Popen([str(APP/'MacOS/AshackyLauncher')],env=env,stdout=log,stderr=log);children.append(view)
-        # Control and lock observation are linked into the app. Do not boot the
+        # Control and native locking are linked into the app. Do not boot the
         # guest until its authenticated control endpoint is ready.
         deadline=time.monotonic()+30
         while True:

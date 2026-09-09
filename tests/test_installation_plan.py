@@ -43,6 +43,7 @@ class InstallationPlanTests(unittest.TestCase):
             session = next((output / 'host/LaunchAgents').glob('*.session.plist'))
             self.assertNotIn('KeepAlive', plistlib.loads(session.read_bytes()))
             self.assertNotIn('ASHACKY_GUEST_SSH', plistlib.loads(session.read_bytes())['EnvironmentVariables'])
+            self.assertEqual(set(plistlib.loads(session.read_bytes())['EnvironmentVariables']), {'LINUXHOST_CONTROL_CONFIG'})
             # The frontend owns permission services; no second app can race its listeners.
             jobs = [plistlib.loads(path.read_bytes()) for path in (output / 'host/LaunchAgents').glob('*.plist')]
             self.assertEqual({job['Label'].rsplit('.', 1)[-1] for job in jobs},

@@ -40,16 +40,17 @@ This is not the guest runtime package list. The kernel build additionally needs 
 ./ashacky build guest --kernel "$(uname -r)"
 ```
 
-This prepares the pinned rockchip-vaapi source with Ashacky's patch and compiles it with the maintained `guest/video` helpers. It produces the PAM module, camera-reader utility and VA driver. The kernel option builds Wi-Fi, Bluetooth rfkill and battery modules in `build/guest/drivers`. The distribution supplies v4l2loopback.
+This prepares the pinned rockchip-vaapi source with Ashacky's patch and compiles it with the maintained `guest/video` helpers. It produces the PAM module, camera-reader utility, shared camera-memory library and VA driver. The kernel option builds Wi-Fi, Bluetooth rfkill and battery modules in `build/guest/drivers`. The distribution supplies v4l2loopback.
 
-For a camera-only update, rebuild just its usage helper inside the guest:
+For a camera-only update, rebuild its usage helper and memory library inside the guest:
 
 ```sh
 mkdir -p build/guest
 cc -O2 -Wall -Wextra guest/devices/camera_readers.c -o build/guest/camera-readers
+cc -std=c11 -O2 -Wall -Wextra -shared -fPIC host/common/CameraMemory.c -o build/guest/camera-memory.so
 ```
 
-Stage this binary with `camera_demand.py` from the same checkout. The build needs the distro's Linux UAPI headers; runtime additionally requires the v4l2loopback client-usage event verified with version 0.15.4. The helper does not replace or rebuild v4l2loopback. See [camera update and acceptance](DEVELOPMENT.md#updating-camera-demand-events).
+Stage both outputs with `camera_demand.py` and `camera_shared.py` from the same checkout. The build needs the distro's Linux UAPI headers; runtime additionally requires the v4l2loopback client-usage event verified with version 0.15.4, the private control broker and the separate camera PCI mapping. The helper does not replace or rebuild v4l2loopback. See [camera transport update and acceptance](DEVELOPMENT.md#updating-camera-transport); an existing SSH camera installation needs the matching host/QEMU topology update.
 
 ### Optional Wi-Fi kernel link check
 
@@ -159,7 +160,7 @@ Follow DEVELOPMENT.md for guest updates and the clean session stop. Switch the v
 ./ashacky build host --installation /absolute/private/helper-build.json
 ```
 
-The first command compiles VideoToolbox shared decoding. The frontend build links host control, native macOS screen locking and Wi-Fi/Bluetooth/audio/camera services into the Ashacky executable. There are no standalone SessionSync or LinuxHostControl executables. `check-runtime.py` tests private-channel framing, authentication, concurrency and reconnection, real Swift/Python interoperability, native lock authorization with a stub and the clean-shutdown gate without locking a real session or performing power actions. The Linux source suite uses GJS for the isolated GNOME lock adapter test; no desktop is opened. It also verifies that Metal's SPICE connection advertises IOSurface scanout even when SPICE was built without EGL. The second command also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
+The first command compiles VideoToolbox shared decoding. The frontend build links host control, native macOS screen locking and Wi-Fi/Bluetooth/audio/camera services into the Ashacky executable. There are no standalone SessionSync or LinuxHostControl executables. `check-runtime.py` tests private-channel framing, authentication, concurrency and reconnection, real Swift/Python interoperability, native lock authorization with a stub and the clean-shutdown gate without locking a real session or performing power actions. The Linux source suite uses GJS for the isolated GNOME lock adapter test; no desktop is opened. The frontend and Linux camera reader compile the same `host/common/CameraMemory.c` layout; the guest build installs it as `camera-memory.so`. Runtime validation also checks native slot ownership and real Swift/Python generated frames without opening the camera. It also verifies that Metal's SPICE connection advertises IOSurface scanout even when SPICE was built without EGL. The second command also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
 
 ```json
 {

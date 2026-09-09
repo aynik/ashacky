@@ -1,103 +1,123 @@
+import AppKit
 import AVFoundation
-import SystemConfiguration
+import CoreFoundation
 
-/// Live camera stream for a same-user client in the active console session.
-/// Nothing is recorded; each connection is bounded to thirty seconds.
+/// Demand-controlled camera. Only descriptors cross private RPC; pixels live in
+/// a separate shared PCI mapping. No SSH, file recording or idle capture.
 final class CameraService: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    let control = DispatchQueue(label: "local.linuxhost.camera.control")
-    let frames = DispatchQueue(label: "local.linuxhost.camera.frames")
+    let control = DispatchQueue(label: "local.ashacky.camera.control")
+    let frames = DispatchQueue(label: "local.ashacky.camera.frames")
     let lock = NSLock()
     var processLock: ServiceProcessLock?
-    var server: RawUnixServer?
+    var server: UnixServer?
+    var buffer: CameraBuffer?
     var session: AVCaptureSession?
-    var client: Int32 = -1
     var activeOutput: AVCaptureOutput?
-    var count: UInt32 = 0
+    var stream: String?
+    var lease: DispatchSourceTimer?
+    var observers = [NSObjectProtocol]()
+    var count = 0
 
     static func active() -> Bool { AshackyHostServices.active() }
     func start(directory: URL) throws {
         processLock = try ServiceProcessLock(path: directory.path + "/camera-workbench.lock")
-        server = try RawUnixServer(path: directory.path + "/camera-workbench.sock") { [self] fd in
+        buffer = try CameraBuffer(path: directory.appendingPathComponent("runtime/camera-frames.bin").path)
+        server = try UnixServer(path: directory.path + "/camera-workbench.sock") { [self] fd, request in
             var uid: uid_t = 0, gid: gid_t = 0
-            guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { close(fd); return }
-            prepareSocket(fd, seconds: 2)
-            control.async { self.start(fd) }
-        }
-    }
-    func requestAuthorization() {
-        guard Self.active() else { return }
-        AVCaptureDevice.requestAccess(for: .video) { _ in }
-    }
-    func shutdown() { control.sync { self.stop() } }
-    func message(_ text: String) { NSLog("%@", text) }
-    enum CameraError: Error { case invalid }
-    func start(_ fd: Int32) {
-        guard session == nil, Self.active(), AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { close(fd); return }
-        do {
-            let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera], mediaType: .video, position: .unspecified)
-            guard let camera = discovery.devices.first else { throw CameraError.invalid }
-            let capture = AVCaptureSession()
-            capture.beginConfiguration()
-            capture.sessionPreset = .vga640x480
-            let input = try AVCaptureDeviceInput(device: camera)
-            guard capture.canAddInput(input) else { throw CameraError.invalid }
-            capture.addInput(input)
-            let output = AVCaptureVideoDataOutput()
-            output.alwaysDiscardsLateVideoFrames = true
-            output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
-            output.setSampleBufferDelegate(self, queue: frames)
-            guard capture.canAddOutput(output) else { throw CameraError.invalid }
-            capture.addOutput(output); capture.commitConfiguration()
-            session = capture
-            lock.lock(); client = fd; activeOutput = output; count = 0; lock.unlock()
-            capture.startRunning()
-            message("Camera is streaming to the Linux virtual machine. It will stop within 30 seconds.")
-            control.asyncAfter(deadline: .now() + 30) { [weak self, weak capture] in
-                guard let self, let capture, self.session === capture else { return }
-                self.stop()
+            guard getpeereid(fd, &uid, &gid) == 0, uid == getuid(), Self.active() else {
+                return ["ok": false, "error": "Camera requires the active console user"]
             }
-        } catch {
-            close(fd); message("Could not start the built-in camera.")
+            return control.sync {
+                do { return try self.request(request) }
+                catch { return ["ok": false, "error": String(describing: error)] }
+            }
         }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                guard let self else { return }
+                self.control.async { self.stop() }
+            })
+        }
+    }
+    func shutdown() {
+        for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        observers.removeAll()
+        control.sync { self.stop() }
+    }
+    func renew() {
+        if let lease { lease.schedule(deadline: .now() + 5); return }
+        let timer = DispatchSource.makeTimerSource(queue: control)
+        timer.schedule(deadline: .now() + 5)
+        timer.setEventHandler { [weak self] in self?.stop() }
+        lease = timer; timer.resume()
+    }
+    func request(_ value: [String: Any]) throws -> [String: Any] {
+        guard Self.active(), AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            stop(); throw IPCError.message("Camera permission or active session unavailable")
+        }
+        if value["action"] as? String == "camera-start", value.count == 1 {
+            guard session == nil else { throw IPCError.message("Camera already in use") }
+            let id = try begin()
+            return ["ok": true, "stream": id, "width": 1280, "height": 720, "format": "nv12", "memoryBytes": 8 * 1024 * 1024]
+        }
+        guard let id = value["stream"] as? String, id == stream else { throw IPCError.message("Stale camera stream") }
+        if value["action"] as? String == "camera-stop", value.count == 2 {
+            stop(); return ["ok": true]
+        }
+        guard value["action"] as? String == "camera-next", value.count == 3,
+              let ack = value["ack"] as? NSNumber, CFGetTypeID(ack) != CFBooleanGetTypeID(),
+              !["f", "d"].contains(String(cString: ack.objCType)),
+              ack.int64Value >= 0, ack.int64Value <= Int32.max else { throw IPCError.message("Invalid camera request") }
+        do {
+            let reply = try buffer!.next(stream: id, ack: ack.intValue)
+            renew(); return reply
+        } catch { stop(); throw error }
+    }
+    func begin() throws -> String {
+        let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera], mediaType: .video, position: .unspecified)
+        guard let camera = discovery.devices.first else { throw IPCError.message("Built-in camera unavailable") }
+        let capture = AVCaptureSession()
+        capture.beginConfiguration()
+        guard capture.canSetSessionPreset(.hd1280x720) else { throw IPCError.message("Camera needs 1280x720 capture support") }
+        capture.sessionPreset = .hd1280x720
+        let input = try AVCaptureDeviceInput(device: camera)
+        guard capture.canAddInput(input) else { throw IPCError.message("Camera input unavailable") }
+        capture.addInput(input)
+        let output = AVCaptureVideoDataOutput()
+        output.alwaysDiscardsLateVideoFrames = true
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
+        output.setSampleBufferDelegate(self, queue: frames)
+        guard capture.canAddOutput(output) else { throw IPCError.message("Camera output unavailable") }
+        capture.addOutput(output); capture.commitConfiguration()
+        let id = buffer!.begin(); stream = id; session = capture
+        lock.lock(); activeOutput = output; count = 0; lock.unlock()
+        capture.startRunning(); renew()
+        NSLog("Camera shared-memory capture started")
+        return id
     }
     func stop(expectedOutput: AVCaptureOutput? = nil) {
         lock.lock()
         if let expectedOutput, activeOutput !== expectedOutput { lock.unlock(); return }
-        let fd = client; client = -1; activeOutput = nil; let sent = count; lock.unlock()
-        session?.stopRunning(); session = nil
-        if fd >= 0 { close(fd) }
-        message("Camera stopped. Sent \(sent) frames; no recording was saved.")
+        let wasActive = activeOutput != nil, sent = count
+        activeOutput = nil; lock.unlock()
+        lease?.cancel(); lease = nil
+        session?.stopRunning(); session = nil; stream = nil
+        buffer?.end()
+        if wasActive { NSLog("Camera stopped after %d shared frames; no recording was saved", sent) }
     }
     func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
         lock.lock(); defer { lock.unlock() }
-        guard client >= 0, activeOutput === output else { return }
+        guard activeOutput === output else { return }
         guard Self.active(), let pixel = CMSampleBufferGetImageBuffer(sample),
               CVPixelBufferGetPixelFormatType(pixel) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-              CVPixelBufferGetPlaneCount(pixel) == 2 else { control.async { self.stop(expectedOutput: output) }; return }
-        let width = CVPixelBufferGetWidth(pixel), height = CVPixelBufferGetHeight(pixel)
-        guard width > 0, height > 0, width <= 1280, height <= 720, width % 2 == 0, height % 2 == 0 else { control.async { self.stop(expectedOutput: output) }; return }
-        CVPixelBufferLockBaseAddress(pixel, .readOnly)
+              CVPixelBufferGetPlaneCount(pixel) == 2,
+              CVPixelBufferGetWidth(pixel) == 1280, CVPixelBufferGetHeight(pixel) == 720 else {
+            control.async { self.stop(expectedOutput: output) }; return
+        }
+        guard CVPixelBufferLockBaseAddress(pixel, .readOnly) == kCVReturnSuccess else { return }
         defer { CVPixelBufferUnlockBaseAddress(pixel, .readOnly) }
-        var data = Data("LHCV0001".utf8)
-        for value in [UInt32(width), UInt32(height), UInt32(width * height * 3 / 2), count] {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        for plane in 0...1 {
-            guard let base = CVPixelBufferGetBaseAddressOfPlane(pixel, plane) else { return }
-            let rows = plane == 0 ? height : height / 2
-            let stride = CVPixelBufferGetBytesPerRowOfPlane(pixel, plane)
-            for row in 0..<rows { data.append(base.advanced(by: row * stride).assumingMemoryBound(to: UInt8.self), count: width) }
-        }
-        let okay = data.withUnsafeBytes { bytes -> Bool in
-            var offset = 0
-            while offset < bytes.count {
-                let n = Darwin.write(client, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-                if n <= 0 { return false }
-                offset += n
-            }
-            return true
-        }
-        if okay { count &+= 1 } else { control.async { self.stop(expectedOutput: output) } }
+        guard let y = CVPixelBufferGetBaseAddressOfPlane(pixel, 0), let uv = CVPixelBufferGetBaseAddressOfPlane(pixel, 1) else { return }
+        buffer?.publish(y: y, yStride: CVPixelBufferGetBytesPerRowOfPlane(pixel, 0), uv: uv, uvStride: CVPixelBufferGetBytesPerRowOfPlane(pixel, 1))
+        count += 1
     }
 }

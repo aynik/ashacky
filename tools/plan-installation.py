@@ -71,9 +71,7 @@ def generate(c, destination):
     while macs[0] == macs[1]:
         macs[1] = '02:' + ':'.join(f'{byte:02x}' for byte in secrets.token_bytes(5))
     owner = c['hostUser'] + ':' + c['group']
-    env = {'LINUXHOST_SESSION_CONFIG': str(base / 'transport.json'),
-           'LINUXHOST_CONTROL_CONFIG': str(base / 'control.json'),
-           'ASHACKY_PYTHON': c['hostPython']}
+    env = {'LINUXHOST_CONTROL_CONFIG': str(base / 'control.json')}
     control = {'socket': str(base / 'runtime/host.sock'), 'token': token,
                'powerEnabled': False, 'powerSocket': str(runtime / 'power/power.sock')}
     vm = {'userID': uid, 'uuid': identity, 'diskSerial': 'ashacky-' + secrets.token_hex(8),
