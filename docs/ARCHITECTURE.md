@@ -108,6 +108,12 @@ The connection contract is open Wi-Fi or WPA2-PSK with CCMP. Enterprise authenti
 
 The guest bridge watches atomic status replacements with inotify and wakes its existing kernel `poll()` when `wifiRevision` changes. Heartbeats do not trigger extra host reads. Roam verification uses fresh scan information and a second identity read after the scan, since scanning can take seconds. A missing identity must persist across a one-second confirmation deadline before link loss is reported; unavailable Location authorization is not treated as a disconnect. The existing five-second signal refresh also provides link reconciliation for old/stale frontends and missed events. Signal notifications remain a separate refinement.
 
+## Trackpad input waits
+
+The guest waits on the existing `org.linuxhost.input` virtio-serial port until touch data arrives or a real deadline expires. It sends `LH_INPUT_READY` once per second and releases held contacts/buttons after one second without a valid frame. These deadlines are independent: unrelated partial input cannot postpone release. There is no fixed 100 ms idle check. A blocked readiness reply waits for descriptor writability while continuing to accept input and enforce the held-contact deadline. EOF/errors release state and close the port; the existing one-second reconnect delay remains.
+
+`LH_INPUT_APPLIED` is sent only after a nonempty, validated contact frame reaches uinput. Device identity, coordinates, slot/button handling and the host's pointer-ownership gates are unchanged. The frontend retains its three-second readiness expiry, half-second applied-frame expiry, 250 ms touch-state heartbeat and focus/cancellation handling. The host can therefore still send empty frames periodically, and the guest must still wake for readiness; this refinement does not promise zero idle wakeups. Host heartbeat/focus changes require separate review and attended fallback testing.
+
 ## Camera demand events
 
 The camera service keeps the V4L2 device discoverable with a persistent FFmpeg writer primed with generated black frames. The usage helper subscribes to v4l2loopback's private client-usage event, requesting an initial snapshot, and blocks in `poll()` until an event or channel failure. This contract was verified against v4l2loopback 0.15.4; the reported value is a reader-active boolean, not a reader count. An incompatible module must fail visibly instead of opening the host camera without reliable demand tracking.

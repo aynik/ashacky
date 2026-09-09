@@ -154,6 +154,16 @@ When suitable multi-AP hardware is available, verify a real host roam updates Li
 
 Recovery restores the matching bridge/scan/link/dependency files, DKMS source and private receipt, then rebuilds and reloads the previous module using the same procedure. Remove a newly introduced companion only if the recovery record says it was absent before. Keep the host app, profiles and permission grants intact.
 
+### Updating trackpad input waits
+
+Run `./ashacky check` and stage the guest payload. Preserve the installed `/opt/linuxhost-probe/trackpad/trackpad.py` and its receipt before replacing the script, root-owned 0644 under 0755 parent directories. Record its installed hash. The Python `evdev` dependency, uinput device properties, systemd unit, SPICE port and host app are unchanged; no compilation or VM restart is needed.
+
+Do not start a second consumer on `org.linuxhost.input`: competing reads would steal touch frames. Use private sockets and a recording-only uinput substitute for candidate transport tests. A passive observer may read the existing evdev device without grabbing it, recording only aggregate counts. Do not create an experimental desktop input device or send readiness/applied acknowledgements to the real host during isolated tests.
+
+For an attended cutover, arrange a bounded restoration of the recorded script/receipt before restarting only `linuxhost-trackpad.service`. Check its PID, installed hash and exactly one matching virtual touchpad. Test pointer movement, clicks/drag, two-finger scrolling and pinch, plus releasing all contacts and leaving/re-entering the VM window where practical. Cancel restoration only after the candidate is healthy and the owner confirms input works. If input fails, restore the recorded script/receipt and restart that unit; stopping the service also lets the host's applied-frame gate expire into ordinary SPICE pointer fallback. Do not change that gate to conceal a guest failure.
+
+Measure idle wakeups separately from actual touch traffic. One-second readiness and the unchanged host 250 ms touch-state heartbeat still cause legitimate activity. The removed behavior is the fixed 100 ms guest check. Held contacts/buttons must release at their own one-second deadline even if partial data arrives or replies are blocked. Channel/create failures retain the existing one-second reconnect delay. Sleep/wake and host-side heartbeat changes need separate acceptance; a source revert alone does not restore the installed script.
+
 ### Updating camera demand events
 
 Run the source checks and [camera helper build](BUILD.md#guest-components), then stage the payload. Preserve the installed `/opt/linuxhost-probe/camera_demand.py`, `/opt/linuxhost-probe/camera-readers` and receipt before replacing them. The script is root-owned 0644; the compiled helper is root-owned 0755, with readable parent directories. Record both installed hashes. No new host app, permission, QEMU device, kernel module build or VM restart is needed.

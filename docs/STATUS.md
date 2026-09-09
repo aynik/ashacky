@@ -45,6 +45,10 @@ The updated guest module delegates automatic AP selection to macOS and reports t
 
 The module and matching guest files are installed. Three rapid off/on cycles reconnected in 2.4–3.7 seconds with matching host/guest APs and no different-BSSID failures; the Wi-Fi packet-path check passed. One cycle still logged transient macOS operation failures before recovering, so these samples do not establish retry-free or guaranteed reconnection latency. Unit and isolated kernel checks cover roaming, generation races, security and explicit-pin enforcement. Physical roaming between APs has not yet been observed with this update.
 
+## Trackpad input waits
+
+The installed guest input loop uses data/writability events and independent one-second readiness and held-contact deadlines instead of a fixed 100 ms idle check. Private socket and simulated-time tests cover contact acknowledgement, partial input, stale release, blocked replies, EOF and creation failure without changing the desktop's input path. The owner confirmed normal pointer movement, clicks/drag, two-finger scrolling and pinch after activation. A 15-second live sample fell from 194 to 90 context switches; host heartbeat and actual input contribute to these samples, so they are not pure timer counts. The existing host heartbeat and pointer-fallback gates remain; sleep/wake and forced host-side fallback have not been retested with this refinement.
+
 ## Camera demand
 
 The camera service and usage helper use blocking event waits while idle. Reader demand starts host capture; reader closure stops it and replaces the last image with generated black frames. Loss of the usage monitor or writer wakes the service for recovery. The existing stream lease, cancellation limits and bounded retries remain, as does FFmpeg's internal worker behavior. The usage-event contract is verified with v4l2loopback 0.15.4; other versions require acceptance.

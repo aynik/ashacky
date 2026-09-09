@@ -183,6 +183,16 @@ With no active reader, the old main loop had 179 context switches and the usage 
 
 The existing host log confirmed camera shutdown after both readers closed. All 59 source tests passed on Linux; guide review checked 30 shell blocks and resolved 33 relative links/anchors.
 
+## Trackpad input wait refinement
+
+Four added tests exercise the production loop with simulated monotonic time, real private socket pairs and a recording-only uinput substitute. They verify separate heartbeat/contact deadlines, stale release despite partial incoming data, acknowledgement only after validated contact submission, contact/button release on invalid frames and EOF, writable-event recovery from a saturated reply direction without spinning, and port closure when uinput creation fails. The original contact/validation tests also pass. No test opens the actual SPICE input port or creates/grabs a desktop input device.
+
+All 63 source tests passed on Linux, including the four new transport/deadline cases; the six trackpad cases also passed as a focused run. Isolated Debian staging verified the script and existing unit hashes, root ownership, readable parent directories and service action, then removed the temporary payload without installation. Guide review checked 30 shell blocks and resolved 34 relative links/anchors.
+
+The live update preserved the original script and receipt entry, arranged three-minute automatic restoration, and restarted only the trackpad service. It verified exactly one native touchpad, the service's port/uinput descriptors and matching source/installed/receipt hashes. The owner confirmed pointer movement, clicking/dragging, two-finger scrolling and pinch behaved normally. Restoration was then cancelled, leaving the accepted candidate active with no automatic service restarts. A passive non-grabbing observer recorded no contact events during its window, so it provides no independent gesture trace; gesture acceptance comes from the owner's test.
+
+The existing live service recorded 194 context switches in a 15-second baseline; the updated service recorded 90 over the same interval. The host's touch-state heartbeat and actual input contribute to these counts, so this is a bounded functional comparison, not a pure timer or CPU-power measurement. The fixed guest check is removed; readiness, stale-contact expiry, host heartbeats and recovery delays remain. No host app, VM, device identity or pointer-ownership gate changed. Sleep/wake and forced host-side fallback were not retested.
+
 ## Remaining validation limits
 
 These checks establish functional build/staging reproduction with the recorded host SDK and existing Homebrew prerequisites, not byte-identical output or clean-machine installation. The isolated audit did not install or boot its outputs. The later controlled migration installed guest services and the PAM module path with password fallback; the reference host cutover now works, while full macOS logout/login after final cleanup and fresh-account acceptance remain pending. The cloud-init seed attachment, fresh-account boot, hardware/session behavior after parameterization, other distro adapters, and receipt-driven migration/uninstall still require attended acceptance. See [INSTALL.md](INSTALL.md).

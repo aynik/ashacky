@@ -89,6 +89,8 @@ Host AP selection and roaming reports additionally require the matching `wifi_br
 
 Camera demand uses the payload's `camera_demand.py`, `camera_bridge.py` and compiled `camera-readers`, plus the existing FFmpeg and v4l2loopback runtime packages. The usage event is private to v4l2loopback and was verified with version 0.15.4; check subscription and the initial inactive state before claiming another module version works. The service keeps the device discoverable but opens the host camera only when a reader requests it. Follow the [camera lifecycle checks](DEVELOPMENT.md#updating-camera-demand-events); no additional Python package, host build or permission identity is introduced by the idle-wait update.
 
+Trackpad integration needs the payload's `trackpad.py`, the existing Python `evdev` package, uinput access and `org.linuxhost.input` port. Run only one port consumer and retain the frontend's readiness/applied-frame gates. The guest waits for input and heartbeat/contact-expiry deadlines, with no fixed 100 ms idle check. Follow the [attended trackpad update procedure](DEVELOPMENT.md#updating-trackpad-input-waits) for an existing desktop; installing the script alone does not verify pointer ownership or gestures.
+
 Check `ldd` on the staged broker before installation: `libavcodec` and `libavutil` must resolve inside the payload's private library directory, with other dependencies provided by the distro. Do not run the broker as a staging test: its normal job is to connect to the host decoder service.
 
 ## Host placement and launch, when requested

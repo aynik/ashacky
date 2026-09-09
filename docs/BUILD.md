@@ -16,6 +16,8 @@ On macOS, Apple's `/usr/bin/python3` may be older than required. Put the chosen 
 
 `./ashacky check` runs on either OS. Linux integration tests for evdev, inotify, GIO, PipeWire monitoring, Wi-Fi request readiness, camera lifecycle and the private Bluetooth bus are reported as skipped on macOS. On Linux, use the distro's Python with its evdev and PyGObject/GIO bindings. Install `dbus-daemon` so the private-bus check runs instead of being skipped; that test uses `dbus-run-session` and never claims the live system bus. Wi-Fi readiness tests use pipes and private socket fixtures, not the installed module or physical radio; compile and live module checks remain separate. Camera tests likewise use generated pixels, private sockets and child pipes, with no camera device or host capture.
 
+Trackpad deadline tests use simulated monotonic time, recording-only uinput substitutes and private socket pairs, including a blocked reply direction. They neither open the real input port nor create/grab a desktop input device. Live pointer, gesture and fallback checks remain separate from the source suite.
+
 The ANGLE dependency is part of UTM's WebKit fork and can be large. An optional sparse checkout inside `third_party/angle-webkit` can keep only `Source/ThirdParty/ANGLE`, `Configurations` and `Tools/ccache` in its working tree; the recorded commit must remain unchanged.
 
 ## Guest components

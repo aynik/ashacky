@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Host touch frames -> a standard Linux type-B multitouch touchpad."""
-import json, os, select, time
+import errno, json, os, select, time
 from evdev import UInput, AbsInfo, ecodes as e
 PORT='/dev/virtio-ports/org.linuxhost.input'
 def create():
@@ -41,35 +41,53 @@ class Pad:
         for bit,code in enumerate([e.BTN_LEFT,e.BTN_RIGHT,e.BTN_MIDDLE]):u.write(e.EV_KEY,code,int(bool(buttons&(1<<bit))))
         u.syn();self.buttons=buttons
 
+def reply(fd,message):
+    if os.write(fd,message)!=len(message):
+        raise OSError(errno.EIO,'Incomplete trackpad acknowledgement')
+
+def serve(fd,pad):
+    """Wait for input, heartbeat/held-contact deadlines or reply writability."""
+    buf=b'';last=time.monotonic();next_ready=last;blocked=False
+    try:
+        while True:
+            now=time.monotonic()
+            if (pad.slots or pad.buttons) and now-last>=1:
+                pad.frame([],0)
+            if now>=next_ready and not blocked:
+                try:
+                    reply(fd,b'LH_INPUT_READY\n');next_ready=time.monotonic()+1
+                except BlockingIOError:
+                    blocked=True
+            deadlines=[] if blocked else [next_ready]
+            if pad.slots or pad.buttons:deadlines.append(last+1)
+            timeout=max(0,min(deadlines)-time.monotonic()) if deadlines else None
+            readable,writable,_=select.select([fd],[fd] if blocked else [],[],timeout)
+            if writable:blocked=False
+            if not readable:continue
+            try:data=os.read(fd,8192)
+            except BlockingIOError:continue
+            if not data:return
+            buf+=data
+            if len(buf)>65536:raise ValueError('oversized input')
+            while b'\n' in buf:
+                line,buf=buf.split(b'\n',1)
+                try:
+                    points,buttons=validate(json.loads(line));pad.frame(points,buttons);last=time.monotonic()
+                    # Only a validated frame submitted to uinput permits the
+                    # host to suppress its ordinary pointer path.
+                    if points:
+                        try:reply(fd,b'LH_INPUT_APPLIED\n')
+                        except BlockingIOError:pass
+                except (ValueError,TypeError,KeyError):pad.frame([],0)
+    finally:pad.frame([],0)
+
 def main():
     while True:
         try:
             fd=os.open(PORT,os.O_RDWR|os.O_NONBLOCK)
-            with create() as ui:
-                pad=Pad(ui);buf=b'';last=time.monotonic();hello=0
-                try:
-                    while True:
-                        now=time.monotonic()
-                        if now-hello>1:
-                            try:os.write(fd,b'LH_INPUT_READY\n');hello=now
-                            except BlockingIOError:pass
-                        if not select.select([fd],[],[],.1)[0]:
-                            if (pad.slots or pad.buttons) and now-last>1:pad.frame([],0)
-                            continue
-                        data=os.read(fd,8192)
-                        if not data:break
-                        buf+=data
-                        if len(buf)>65536:raise ValueError('oversized input')
-                        while b'\n' in buf:
-                            line,buf=buf.split(b'\n',1)
-                            try:
-                                points,buttons=validate(json.loads(line));pad.frame(points,buttons);last=time.monotonic()
-                                # Acknowledge only successfully validated and submitted contact frames.
-                                if points:
-                                    try:os.write(fd,b'LH_INPUT_APPLIED\n')
-                                    except BlockingIOError:pass
-                            except (ValueError,TypeError,KeyError):pad.frame([],0)
-                finally:pad.frame([],0);os.close(fd)
+            try:
+                with create() as ui:serve(fd,Pad(ui))
+            finally:os.close(fd)
         except (OSError,ValueError) as error:print(str(error),flush=True)
         time.sleep(1)
 if __name__=='__main__':main()
