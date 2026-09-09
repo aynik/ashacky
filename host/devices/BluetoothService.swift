@@ -159,6 +159,11 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
                           let uid = request["uid"] as? String, !uid.isEmpty, uid.utf8.count <= 1024,
                           let direction = request["direction"] as? String, ["input", "output"].contains(direction) {
                     completion(try AudioBackend.select(uid: uid, input: direction == "input"))
+                } else if action == "audio-volume", request.count == 4,
+                          let uid = request["uid"] as? String, !uid.isEmpty, uid.utf8.count <= 1024,
+                          let desired = AudioBackend.validVolume(request["desired"]),
+                          let expected = AudioBackend.validVolume(request["expected"]) {
+                    completion(try AudioBackend.setOutputVolume(uid: uid, desired: desired, expected: expected))
                 } else { completion(["ok": false, "error": "Invalid audio request"]) }
             } catch let failure as AudioBackend.Failure {
                 completion(["ok": false, "error": "Audio device operation failed", "status": failure.status])

@@ -12,6 +12,7 @@ The reference installation was tested on an M1 MacBook Air, macOS 15.7.3, Debian
 - Wi-Fi scan/connect and Bluetooth device control through GNOME.
 - Trackpad and AirPods connected through host Bluetooth; audio endpoint switching and microphone input.
 - Built-in camera bridge and SPICE audio.
+- Native macOS/GNOME output volume and mute synchronization.
 - Retina resolution, external display and monitor hotplug.
 - Trackpad motion, scrolling and Firefox pinch-to-zoom.
 - OpenGL/Vulkan rendering and light gaming.
@@ -25,7 +26,9 @@ The reference installation now runs from this checkout. After the initial direct
 
 Host device hotplug and Linux endpoint selection now use notifications instead of the normal one-second polling loop. The reference output connect/disconnect, selection and sound checks passed; input-device hotplug with this update remains an attended check. An older frontend or stale event channel retains compatibility polling.
 
-macOS output volume and the Linux virtual endpoint volume remain separate controls. The owner requested linking them as a later refinement; this event-delivery change does not synchronize their levels.
+Output master volume and mute are linked after an authorized clean VM restart; the owner confirmed the controls work. Live readback confirms matching host/guest state, unity Linux software master gain, advancing CoreAudio notifications and healthy audio/management services without automatic restarts. Twenty-one audio tests pass, including generated PCM through an isolated PipeWire daemon. The assembled frontend, guest payload and all 76 source tests passed validation.
+
+Outputs without writable master level and mute retain local software volume. Microphone controls and per-application gain remain separate. Physical output switching/hotplug, fixed-volume hardware and rapid concurrent control changes have not been retested for this refinement. See [audio architecture](ARCHITECTURE.md#audio-management-events) for recovery and gain-transition limits.
 
 ## Bluetooth management behavior
 

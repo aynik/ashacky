@@ -12,6 +12,7 @@ import subprocess
 import time
 from bluetooth_management import request
 from audio_events import AudioEvents
+from audio_volume import OutputVolume
 
 SOCKET = '/run/linuxhost-devices/control.sock'
 TRANSPORT = {'output': 'alsa_output.pci-0000_00_04.0.analog-stereo',
@@ -91,6 +92,7 @@ class AudioBridge:
         self.observed = {}
         self.observed_levels = {}
         self.pending_defaults = {}
+        self.volume = OutputVolume()
         self.original = None
         self.state = None
         self.events = AudioEvents(self.reconcile)
@@ -158,16 +160,27 @@ class AudioBridge:
                         self.events.later('defaults-deadline', 2100, self.events.notify)
                         selected = wanted
                 self.observed[direction] = selected
+                if direction == 'output' and active and selected == node_name(active['uid'], direction):
+                    public = next((o for o in objects if o.get('info', {}).get('props', {}).get('node.name') == selected), None)
+                    if public is not None:
+                        updated = self.volume.reconcile(active, public,
+                            lambda payload: request(payload, SOCKET),
+                            lambda name, delay: self.events.later(name, delay, self.events.notify))
+                        if updated is not None:
+                            self.state = state = updated
                 if selected in records:
                     prepare_transport(selected, direction, objects, self.observed_levels)
         except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
             print('Audio synchronization unavailable:', type(error).__name__, flush=True)
-            for name in list(self.children):
-                self.stop_child(name)
+            # A transient management failure must not remove a muted public
+            # sink and cause clients to fall through to an unmuted HDA device.
+            public = next((o for o in self.events.graph.nodes.values()
+                           if self.volume.key and o['id'] == self.volume.key[1]), None)
+            try:
+                self.volume.fallback(public)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                self.volume.reset()
             self.state = None
-            self.observed.clear()
-            self.observed_levels.clear()
-            self.pending_defaults.clear()
             self.events.retry()
 
     def run(self, duration):

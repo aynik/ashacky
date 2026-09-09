@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded desktop access to host audio management; no arbitrary RPC forwarding."""
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -22,6 +23,18 @@ def validate(value):
         uid = value['uid']
         if not isinstance(uid, str) or not 0 < len(uid.encode()) <= 1024:
             raise ValueError('Invalid device UID')
+        return value
+    if set(value) == {'action', 'uid', 'desired', 'expected'} and value['action'] == 'audio-volume':
+        uid = value['uid']
+        if not isinstance(uid, str) or not 0 < len(uid.encode()) <= 1024:
+            raise ValueError('Invalid device UID')
+        for field in ('desired', 'expected'):
+            profile = value[field]
+            if (not isinstance(profile, dict) or set(profile) != {'level', 'muted'}
+                    or type(profile['level']) not in (int, float)
+                    or not math.isfinite(profile['level']) or not 0 <= profile['level'] <= 1
+                    or type(profile['muted']) is not bool):
+                raise ValueError('Invalid output volume')
         return value
     if set(value) == {'action', 'address'} and value['action'] in ('bluetooth-pair', 'bluetooth-connect', 'bluetooth-disconnect'):
         if isinstance(value['address'], str) and re.fullmatch(r'[0-9a-fA-F]{2}(?:[:-][0-9a-fA-F]{2}){5}', value['address']):
