@@ -7,6 +7,7 @@ The reference installation was tested on an M1 MacBook Air, macOS 15.7.3, Debian
 - Direct Linux desktop after macOS login; Finder and Dock absent.
 - Linux logout → macOS logout; coordinated power operations.
 - Sleep/wake and bidirectional lock/unlock synchronization.
+- Battery/AC status through the standard Linux power-supply interface; charger changes immediately reflected in GNOME.
 - Touch ID for lock-screen authentication.
 - Wi-Fi scan/connect and Bluetooth device control through GNOME.
 - Trackpad and AirPods connected through host Bluetooth; audio endpoint switching and microphone input.

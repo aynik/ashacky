@@ -15,7 +15,7 @@ Use existing task authorization for the requested dedicated-session setup. Ask o
 1. Use Command Line Tools for normal setup; do not require full Xcode or a Metal compiler. Fetch the pinned UTM release assets with `python3 tools/prepare-utm-assets.py`. Initialize the recorded dependencies with `git submodule update --init --recursive --depth 1`, then build verified dependencies and components following BUILD.md. Keep submodule checkouts pristine and use the preparation recipes for patches. Build and assemble the runtime and run its relocation checks before any future runtime replacement. The UTM disk image supplies verified upstream libraries and shaders only; do not install its app or copy a personal VM.
 2. Download an official ARM64 image/installer for the selected distribution and verify its published checksum/signature. Record URL, version and digest privately. Create fresh VM UUID, NIC MACs, disk serial, firmware variables and guest-management keys. Have the owner choose a password; never commit it or a password hash.
 3. Bootstrap with a supported cloud-init NoCloud seed, installer hook, or guest-tools disk. SPICE channels do not install software. QGA is usable only after installation. Do not silently enable broad root login or disable host-key checking; generate and pin the dedicated guest management key and exact VM identity.
-4. Use the `session.py` device topology: management virtio NIC first, Wi-Fi transport NIC second, HDA at PCI 4, input port `org.linuxhost.input`, four explicit USB root ports, and the shared-memory device. Keep stock guest kernel/Mesa/browser. Configure guest DHCP on the management NIC and the dedicated Wi-Fi lower interface; do not hardcode a physical Wi-Fi interface name or display model.
+4. Use the `session.py` device topology: management virtio NIC first, Wi-Fi transport NIC second, HDA at PCI 4, input port `org.linuxhost.input`, status port `org.ashacky.status`, four explicit USB root ports, and the shared-memory device. Keep stock guest kernel/Mesa/browser. Configure guest DHCP on the management NIC and the dedicated Wi-Fi lower interface; do not hardcode a physical Wi-Fi interface name or display model.
 5. Install guest components using `guest/layout.json` as the file map. Adapt package names, module signing/DKMS, initramfs, PAM, libva path/diversion and desktop version for the selected distro. Only Debian/GNOME is a tested reference; other combinations need their own acceptance results.
 
 ## Guest integration details
@@ -53,7 +53,8 @@ Use a fresh account and a fresh VM for the complete installation test. Establish
 - Wi-Fi scan/connect, Bluetooth pair/reconnect, audio output/input switching, camera demand capture.
 - Multitouch, clipboard, Retina, external display hotplug, accelerated OpenGL/Vulkan.
 - USB storage remove/reinsert, read and an owner-approved write test; no desktop freeze.
-- Battery updates, Touch ID/password fallback, sleep/wake, both lock directions, guest logout and coordinated power actions.
+- Battery status reports `statusTransport: virtio-serial`; unplug/replug power updates GNOME promptly, and the event channel reconnects after a guest agent restart. See [battery diagnostics](DEVELOPMENT.md#updating-battery-telemetry).
+- Touch ID/password fallback, sleep/wake, both lock directions, guest logout and coordinated power actions.
 - Reboot/login, guest kernel update with rebuilt modules, component update, interrupted setup recovery and uninstall that preserves the VM.
 - VA-API decode in ordinary clients such as mpv; assess sandboxed browsers separately and report measured 4K60 limits without claiming unsupported codecs.
 

@@ -36,9 +36,23 @@ Fresh-account installation requires an explicit setup request. Missing acceptanc
 
 ### Updating battery telemetry
 
-Install the updated `linuxhost-agent` and battery `feed.py` at their existing manifest paths, preserving root ownership and recording installed hashes. Restart their two guest units. They remain compatible with an older host through the status RPC fallback. Build and assemble the updated frontend, then replace the app during a clean session stop. Restart QEMU with the updated supervisor arguments to add `org.ashacky.status`; rebuilding the app alone cannot add a port to an already running VM. No battery module rebuild, credential change or privacy prompt is required.
+Install the updated `linuxhost-agent` and battery `feed.py` at their existing manifest paths, preserving root ownership and recording installed hashes. Restart their two guest units. They remain compatible with an older host through the status RPC fallback. Build and assemble the updated frontend, then replace the app during a clean session stop. Restart QEMU with the updated supervisor arguments to add `org.ashacky.status`; rebuilding the app alone cannot add a port to an already running VM. This update does not change the battery module ABI or credentials and adds no macOS permission requirement.
 
-Verify `/run/linuxhost/status.json` reports `statusTransport: virtio-serial`. Disconnect/reconnect power and observe UPower, then restart the guest agent to check reconnection. The cache should keep refreshing at least every ten seconds while idle. Record the observed latency; build checks alone do not establish live charger behavior.
+Verify `/run/linuxhost/status.json` reports `statusTransport: virtio-serial`. Disconnect/reconnect power and observe UPower, then restart the guest agent to check reconnection. The heartbeat normally refreshes the cache every ten seconds while awake; it is a health check, not the charger-change delivery interval. Record the observed latency; build checks alone do not establish live charger behavior.
+
+Read-only guest diagnostics:
+
+```sh
+python3 -m json.tool /run/linuxhost/status.json
+ls -l /dev/virtio-ports/org.ashacky.status
+systemctl status linuxhost-agent.service linuxhost-battery.service --no-pager
+journalctl -u linuxhost-agent.service -u linuxhost-battery.service -b --no-pager
+upower -e
+```
+
+`rpc-poll` means compatibility mode: check the port exists and that the updated Ashacky frontend is running; changing QEMU arguments requires a VM restart. If the port exists but compatibility mode persists, inspect the agent journal and the private host display log for status-port connection errors. A stale cache points to the host/channel/agent path. A fresh cache with incorrect Linux battery state points to the feeder or module; inspect UPower and `/sys/class/power_supply/`. The driver's `state` file is write-only and is not a diagnostic read interface. Do not inject fabricated power states into a live desktop.
+
+The agent abandons an event stream after 25 seconds without data and attempts the RPC fallback. The feeder accepts cache snapshots up to 20 seconds old; the kernel watchdog marks telemetry unavailable after roughly 30–35 seconds without a valid write. Suspend can pause these timers; verify recovery on wake separately. Loss of telemetry must not be presented as a new charger event.
 
 ### Updating an installation with standalone session helpers
 
