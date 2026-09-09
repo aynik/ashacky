@@ -116,9 +116,7 @@ def generate(c, destination):
     job('session-sync', [app / 'MacOS/SessionSync'])
     job('control-forward', [c['hostPython'], checkout / 'host/session/control-forward.py'])
     job('device-forwards', [c['hostPython'], checkout / 'host/transport/probe-device-service.py'])
-    for name in ('WiFi', 'Bluetooth', 'Camera'):
-        job(name.lower(), ['/usr/bin/open', '-W', '-g', '-a', checkout / 'build/host' / (name + 'Workbench.app'),
-                           '--args', '--service', base])
+
     job('h264', [app / 'MacOS/vtremoted', '--listen', c['hostAddress'] + ':5557'])
     for name in ('shared', 'wifi'):
         job('network-' + name, [root / 'network.sh', name], system=True)

@@ -8,11 +8,11 @@ Ashacky provides a Linux desktop on a dedicated macOS account. macOS retains own
 flowchart TB
   Login[macOS login / dedicated account] --> Session[VM supervisor]
   Session --> QEMU[QEMU + HVF]
-  Session --> Frontend[CocoaSpice / Metal frontend]
+  Session --> Frontend[Ashacky.app: CocoaSpice / Metal + device services]
   Frontend <-->|SPICE Unix socket| QEMU
   QEMU --> Guest[Linux guest]
   Frontend <-->|touch frames / readiness| Input[virtio-serial input port → uinput]
-  Guest <-->|private SSH / Unix socket forwards| Devices[macOS Wi-Fi / Bluetooth / camera helpers]
+  Guest <-->|private SSH / Unix socket forwards| Frontend
   Guest <-->|control requests| Control[Unprivileged host control]
   Control --> Power[Restricted root power helper]
   Sync[Host lock observer] <-->|fixed guest session operations| Guest
@@ -23,7 +23,7 @@ flowchart TB
   Memory --> VA
 ```
 
-The supervisor owns QMP and one private VM disk. It connects the network backends, starts host control/video helpers and QEMU, connects the frontend, then continues the guest. It checks for another process using the disk before launch. Frontend and codec retries are bounded. An intentional guest shutdown does not start a new VM.
+The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. It connects the network backends, starts host control/video helpers and QEMU, connects the frontend, then continues the guest. It checks for another process using the disk before launch. Frontend and codec retries are bounded. An intentional guest shutdown does not start a new VM.
 
 SPICE handles display, cursor, keyboard, audio, clipboard and guest display changes. The frontend creates a borderless display window directly rather than entering a native fullscreen Space after a windowed launch. Its escape shortcut is Control–Option–Shift–F12; a keyboard may require Fn for F12. The source supports two guest outputs; more have not been validated.
 
@@ -42,7 +42,7 @@ SPICE handles display, cursor, keyboard, audio, clipboard and guest display chan
 | Graphics | virtio GPU, VirGL/Venus | Host ANGLE/Metal and Vulkan/MoltenVK stack. Stock guest Mesa; no custom Firefox build. |
 | Video | General VA-API driver | VP9 through VideoToolbox/shared memory; H.264 through the pinned remote FFmpeg decoder. Codec and performance limits are in STATUS.md. |
 
-Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. macOS permission bundles currently retain their earlier Workbench identifiers; normal runtime uses their service modes without diagnostic windows.
+Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. A manual `--setup` mode presents a single permission window without opening a VM display; normal runtime opens only the Linux display. Socket names retain their existing protocol compatibility names.
 
 ## Session and privilege boundaries
 

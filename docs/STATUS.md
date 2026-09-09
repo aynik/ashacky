@@ -18,7 +18,7 @@ The reference installation was tested on an M1 MacBook Air, macOS 15.7.3, Debian
 
 Upstream sources are now pinned submodules with Ashacky patches applied during preparation. Source recipes prepare from pinned inputs. The documented builds cover the guest modules and VA/FFmpeg stack, SPICE/GStreamer, QEMU, render server, frontend and macOS helpers. The assembled runtime passes relocation, dependency, signature, GPU-shader and silent audio checks without a VM. The audit and its limits are recorded in [VALIDATION.md](VALIDATION.md).
 
-The repository copy has not replaced that installation. Source parameterization, a changed account, a clean guest, build dependency changes and regenerated signing identities still require acceptance tests.
+The controlled reference migration has installed the repository-built guest payload with private rollback receipts. Its core services and H.264/VP9 `vaapi-copy` smoke tests pass against the original host. The new host runtime is built and checked but has not yet booted that VM. Source parameterization, a changed account, a clean guest, build dependency changes and regenerated signing identities still require acceptance tests.
 
 ## Video limits
 
@@ -28,12 +28,12 @@ The custom Firefox, browser launcher/preload/preferences and queued VA-driver ex
 
 ## Remaining acceptance and portability work
 
-The current audit is limited to instruction review, read-only inspection and isolated builds. Fresh-account testing and migration are deferred at the owner's request; no separate setup agent will be run against this machine.
+The owner has authorized controlled migration of the existing reference installation. Fresh-account testing remains deferred; no separate setup agent is used. Ashacky.app now links the CocoaSpice display and permission services into one process; its new permission identity has passed attended grants and a restart check. Host cutover still needs logout/login acceptance.
 
 1. Apply the generated configs, signed bundles, privileged helper closure and Debian payload in a fresh account/VM, then execute the acceptance checklist. Builds and relocation passed; boot, permissions and device behavior from this new layout have not been tested.
 2. Establish and test helper/network/device isolation before simultaneous installations. The plan uses per-account helper labels/sockets and binds video to a selected management address; video protocols are not authenticated and this alone is not proof of cross-account isolation.
-3. Validate the Debian provisioning recipe, including cloud-init or installer bootstrap, management networking, DKMS/kernel updates, BlueZ ownership, PAM/GDM, GNOME and the VA diversion. Offline plans and payloads were generated and checked, not installed.
+3. Validate the Debian provisioning recipe, including cloud-init or installer bootstrap, management networking, DKMS/kernel updates, BlueZ ownership, PAM/GDM, GNOME and the VA diversion. The payload has been applied to the existing guest; a fresh guest bootstrap remains unverified.
 4. Implement Ubuntu/Fedora and other desktop-version adapters before claiming support. Debian ARM64/GNOME 50 is the reference combination. Browser-specific integration is outside the package.
-5. Test update/recovery and receipt-driven migration/uninstall. The agent workflow records originals and applied changes; automated receipt application/rollback is not implemented.
+5. Test update/recovery and receipt-driven migration/uninstall. The reference migration records originals and applied changes in private receipts. A general-purpose automatic migration/uninstall command is not shipped.
 
-Full Xcode is optional for rebuilding upstream shaders/graphics and is not a normal setup prerequisite. Homebrew libraries and Apple SDK versions are recorded build prerequisites, not byte-for-byte reproducibility guarantees. The repository remains a source-and-recipes project with a working reference installation; no production login policy, service, VM or application was replaced during consolidation.
+Full Xcode is optional for rebuilding upstream shaders/graphics and is not a normal setup prerequisite. Homebrew libraries and Apple SDK versions are recorded build prerequisites, not byte-for-byte reproducibility guarantees. The repository remains a source-and-recipes project with a working reference installation; the instruction audit made no live changes; the later controlled guest migration is recorded separately in VALIDATION.md.

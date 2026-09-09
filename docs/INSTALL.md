@@ -33,7 +33,7 @@ Use existing task authorization for the requested dedicated-session setup. Ask o
 
 ## Host services and startup
 
-Generate user LaunchAgents for the session supervisor, control forward, device-service forwards, permission-bundle service modes and SessionSync. Use absolute discovered paths; LaunchAgents do not inherit an interactive shell's PATH. Provide `LINUXHOST_SESSION_CONFIG`, `LINUXHOST_CONTROL_CONFIG` and `ASHACKY_GUEST_SSH` explicitly where used. Respect Unix socket path length limits.
+Generate user LaunchAgents for the session supervisor, control forward, device-service forwards and SessionSync. The CocoaSpice display and permission services share Ashacky.app; do not generate separate device-app jobs. Use absolute discovered paths; LaunchAgents do not inherit an interactive shell's PATH. Provide `LINUXHOST_SESSION_CONFIG`, `LINUXHOST_CONTROL_CONFIG` and `ASHACKY_GUEST_SSH` explicitly where used. Respect Unix socket path length limits.
 
 Also generate a per-user LaunchAgent for the patched `vtremoted` H.264 server built in BUILD.md. Its `--listen` address/port must match the guest broker configuration. Do not assume the supervisor's VP9 helper serves H.264, and do not use upstream's generic service-install script or its default listener. Bundle the server's LZ4/Zstandard runtime dependencies. The server build is separate from `./ashacky build host`; the runtime builder, assembler and offline plan generator cover these outputs.
 
@@ -45,7 +45,7 @@ After ordinary boot, device permission and recovery checks pass, enable automati
 
 ## Acceptance and migration
 
-For the current consolidation, the owner has deferred fresh-account testing to protect the working installation. Continue with instruction review and isolated builds under DEVELOPMENT.md; do not invoke another setup agent or deploy this checkout to demonstrate reproducibility. Record fresh-install acceptance as unverified until the owner explicitly requests that test.
+Fresh-account testing remains unverified. The owner has authorized a controlled migration of the working reference installation, preserving its VM and rollback state. Do not infer permission to run a second setup agent or a concurrent test VM from that migration.
 
 Use a fresh account and a fresh VM for the complete installation test. Establish helper/network isolation before both installations can run. Validate:
 
@@ -57,4 +57,4 @@ Use a fresh account and a fresh VM for the complete installation test. Establish
 - Reboot/login, guest kernel update with rebuilt modules, component update, interrupted setup recovery and uninstall that preserves the VM.
 - VA-API decode in ordinary clients such as mpv; assess sandboxed browsers separately and report measured 4K60 limits without claiming unsupported codecs.
 
-Only after that test should the reference account migrate. Stop its VM cleanly, preserve its private disk/variables/configuration, switch generated integration paths to this one checkout and validate again. Retire old hand-built runtime copies after successful migration. Migration, automatic receipt application/rollback and full fresh-install acceptance remain deferred.
+For an explicitly authorized migration of an existing installation, record originals and rollback before changing files. Preserve its disk, firmware variables, VM/NIC identities, management key and control token. Validate guest changes against the running host first; stop the VM cleanly before switching its supervisor and privileged services. Apply host cutover at logout/login, with a watchdog capable of restoring the old launch configuration if startup fails. Never start a second hypervisor on the same disk. Retire the old runtime only after attended device and session acceptance. A migrated existing VM does not establish fresh-install reproducibility.

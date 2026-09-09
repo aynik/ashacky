@@ -148,8 +148,6 @@ def build_host(args):
     run(['clang', '-O2', '-c', ROOT / 'host/video/fence.c', '-o', out / 'fence.o'])
     run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/video/CodecShared.swift', out / 'fence.o',
          '-o', out / 'LinuxHostVideoShared'])
-    for device in ('wifi', 'bluetooth', 'camera'):
-        run(['bash', ROOT / f'host/devices/build-{device}-workbench.sh'])
     if args.installation:
         config = json.loads(Path(args.installation).read_text())
         generated = out / 'generated'

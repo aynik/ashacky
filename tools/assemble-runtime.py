@@ -227,7 +227,8 @@ def main():
         for path in sorted(nested, key=lambda p: len(p.parts), reverse=True):
             run('codesign', '--force', '--sign', '-', path)
         count = inspect_bundle(staged)
-        run('codesign', '--force', '--sign', '-', staged)
+        run('codesign', '--force', '--sign', '-', '--entitlements',
+            ROOT / 'host/frontend/app-entitlements.plist', staged)
         run('codesign', '--verify', '--deep', '--strict', staged)
         shutil.rmtree(app)
         staged.rename(app)

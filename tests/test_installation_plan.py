@@ -38,6 +38,10 @@ class InstallationPlanTests(unittest.TestCase):
             # Logout must not immediately respawn a new VM via KeepAlive.
             session = next((output / 'host/LaunchAgents').glob('*.session.plist'))
             self.assertNotIn('KeepAlive', plistlib.loads(session.read_bytes()))
+            # The frontend owns permission services; no second app can race its listeners.
+            jobs = [plistlib.loads(path.read_bytes()) for path in (output / 'host/LaunchAgents').glob('*.plist')]
+            self.assertEqual({job['Label'].rsplit('.', 1)[-1] for job in jobs},
+                             {'session', 'session-sync', 'control-forward', 'device-forwards', 'h264'})
             with self.assertRaises(FileExistsError):
                 planner.generate(self.config, output)
 

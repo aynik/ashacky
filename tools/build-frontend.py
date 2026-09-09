@@ -43,6 +43,10 @@ def main():
     objects = output / 'frontend-objects'
     objects.mkdir(parents=True, exist_ok=True)
     contents = output / 'Ashacky.app/Contents'
+    opened = subprocess.run(['/usr/sbin/lsof', '-t', '+D', str(contents.parent)],
+                            capture_output=True, text=True)
+    if opened.stdout.strip() or contents.parent.is_symlink():
+        raise RuntimeError('Refusing to rebuild a running or redirected app')
     (contents / 'MacOS').mkdir(parents=True, exist_ok=True)
     resources = contents / 'Resources'
     bundle = resources / 'CocoaSpice_CocoaSpiceRenderer.bundle/Contents'
@@ -74,19 +78,43 @@ def main():
     inputs = sorted(p for p in (sources / 'CocoaSpice').glob('*.m') if p.name != 'gst_ios_init.m')
     inputs += sorted((sources / 'CocoaSpiceRenderer').glob('*.m'))
     inputs += [gst, ROOT / 'host/frontend/main.m']
-    compiled = []
+    host_sources = [ROOT / 'host/common/IPC.swift', *[ROOT / 'host/devices' / name for name in
+        ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
+         'CameraService.swift', 'HostServices.swift')]]
+    host_object = objects / 'host-services.o'
+    run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O', '-whole-module-optimization',
+         '-module-name', 'AshackyHost', '-emit-object', '-emit-objc-header',
+         '-emit-objc-header-path', objects / 'AshackyHost-Swift.h',
+         '-emit-module-path', objects / 'AshackyHost.swiftmodule',
+         *host_sources, '-o', host_object])
+    flags.append('-I' + str(objects))
+    compiled = [host_object]
     for index, source in enumerate(inputs):
         obj = objects / f'{index}-{source.stem}.o'
         run(['clang', *flags, '-c', source, '-o', obj])
         compiled.append(obj)
     libraries = pkg('--libs')
-    for framework in ('Cocoa', 'Metal', 'MetalKit', 'CoreGraphics', 'IOSurface', 'AVFoundation', 'AudioToolbox'):
+    for framework in ('Cocoa', 'Metal', 'MetalKit', 'CoreGraphics', 'IOSurface', 'AVFoundation', 'AudioToolbox',
+                      'CoreLocation', 'CoreWLAN', 'CoreBluetooth', 'IOBluetooth', 'SystemConfiguration', 'CoreAudio'):
         libraries += ['-framework', framework]
-    run(['clang', *compiled, *libraries, '-o', contents / 'MacOS/LinuxHostSPICE'])
-    (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'local.ashacky.frontend',
-        'CFBundleName': 'Ashacky', 'CFBundleExecutable': 'LinuxHostSPICE', 'CFBundlePackageType': 'APPL',
+    # Swift's linker driver includes the Swift runtime required by the services.
+    link_flags = []
+    for flag in libraries:
+        link_flags += ['-Xlinker', flag]
+    run(['swiftc', *compiled, *link_flags, '-o', contents / 'MacOS/Ashacky'])
+    run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/frontend/Launcher.swift',
+         '-o', contents / 'MacOS/AshackyLauncher'])
+    # Retire the old frontend name when rebuilding an existing output directory.
+    (contents / 'MacOS/LinuxHostSPICE').unlink(missing_ok=True)
+    (contents / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'local.ashacky.host',
+        'CFBundleName': 'Ashacky', 'CFBundleDisplayName': 'Ashacky', 'CFBundleExecutable': 'Ashacky', 'CFBundlePackageType': 'APPL',
         'CFBundleVersion': '1', 'LSMinimumSystemVersion': '12.0', 'NSHighResolutionCapable': True,
-        'NSMicrophoneUsageDescription': 'Send microphone audio to your Linux virtual machine.'}))
+        'NSMicrophoneUsageDescription': 'Send microphone audio to your Linux virtual machine.',
+        'NSCameraUsageDescription': 'Send live camera video to your Linux virtual machine when requested.',
+        'NSLocationUsageDescription': 'Discover Wi-Fi networks and manage the connection from Linux.',
+        'NSLocationWhenInUseUsageDescription': 'Discover Wi-Fi networks and manage the connection from Linux.',
+        'NSBluetoothAlwaysUsageDescription': 'Discover, pair and connect Bluetooth devices from Linux.',
+        'NSBluetoothPeripheralUsageDescription': 'Discover, pair and connect Bluetooth devices from Linux.'}))
     print(contents.parent)
     print('Stage the dependency closure and sign the complete bundle before use; see docs/BUILD.md.')
 

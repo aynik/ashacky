@@ -95,7 +95,7 @@ python3 tools/assemble-runtime.py
 python3 tools/check-runtime.py
 ```
 
-These commands build and stage `build/host/Ashacky.app`, the separate permission apps and network helpers. They do not install services, register an app, change login settings or start a VM. Use an isolated checkout for validation if any build outputs are part of a running installation. The builders refuse redirected output directories and detected use of the host outputs.
+These commands build and stage `build/host/Ashacky.app` and network helpers. They do not install services, register an app, change login settings or start a VM. Use an isolated checkout for validation if any build outputs are part of a running installation. The builders refuse redirected output directories and detected use of the host outputs.
 
 The individual build stages are `deps`, `render-server`, `qemu`, `network`, `frontend`, and `helpers`, in that order. Run `deps` first to establish the Python environment and library prefix. Logs go to stdout/stderr; keep captured logs under ignored `build/`. Rebuild `frontend` before assembling again after dependency changes. A changed source-preparation receipt requires removing only that inactive component's generated source and build directory, as described in DEVELOPMENT.md.
 
@@ -108,7 +108,7 @@ The individual build stages are `deps`, `render-server`, `qemu`, `network`, `fro
 ./ashacky build host --installation /absolute/private/helper-build.json
 ```
 
-The first command compiles host control, SessionSync, VideoToolbox shared decoding and the Wi-Fi/Bluetooth/camera permission bundles. It runs SessionSync's transition self-test, which does not lock/unlock a real session. The second also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
+The first command compiles host control, SessionSync and VideoToolbox shared decoding. The frontend build links the Wi-Fi/Bluetooth/audio/camera services into Ashacky.app; they have no separate build scripts or app bundles. The helper command runs SessionSync's transition self-test, which does not lock/unlock a real session. The second also compiles root power and USB helpers with installation-specific constants. `tools/plan-installation.py` generates this input alongside reviewable service/config files (see PROVISIONING.md). Example schema:
 
 ```json
 {

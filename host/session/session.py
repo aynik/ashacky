@@ -78,7 +78,7 @@ def main():
     # Exclude any existing use of this disk before spawning a second hypervisor.
     opened=sp.run(['/usr/sbin/lsof','-t',c['disk']],capture_output=True,text=True)
     if opened.stdout.strip(): raise RuntimeError('The VM disk is already open; close its current VM before starting standalone')
-    env=dict(os.environ,ANGLE_DEFAULT_PLATFORM='metal',RENDER_SERVER_EXEC_PATH=str(APP/'MacOS/virgl_render_server'),VK_DRIVER_FILES=str(APP/'Resources/MoltenVK_icd.json'),GST_PLUGIN_PATH=str(APP/'Resources/gstreamer-1.0'),GST_PLUGIN_SYSTEM_PATH='',GST_REGISTRY=str(runtime/'gst-registry.bin'),GST_REGISTRY_FORK='no',LINUXHOST_SPICE_SOCKET=str(runtime/'spice.sock'),LINUXHOST_TITLE=c.get('name','Debian'),LINUXHOST_CONTROL_CONFIG=c['control'])
+    env=dict(os.environ,ANGLE_DEFAULT_PLATFORM='metal',RENDER_SERVER_EXEC_PATH=str(APP/'MacOS/virgl_render_server'),VK_DRIVER_FILES=str(APP/'Resources/MoltenVK_icd.json'),GST_PLUGIN_PATH=str(APP/'Resources/gstreamer-1.0'),GST_PLUGIN_SYSTEM_PATH='',GST_REGISTRY=str(runtime/'gst-registry.bin'),GST_REGISTRY_FORK='no',LINUXHOST_SPICE_SOCKET=str(runtime/'spice.sock'),LINUXHOST_TITLE=c.get('name','Debian'),LINUXHOST_CONTROL_CONFIG=c['control'],ASHACKY_PRIVATE_DIRECTORY=str(pathlib.Path(c['control']).parent))
     if c.get('test'): env['LINUXHOST_DIAGNOSTICS']=str(runtime)
     for key in ('DYLD_LIBRARY_PATH','DYLD_FRAMEWORK_PATH','DYLD_FALLBACK_FRAMEWORK_PATH'): env.pop(key,None)
     env['DYLD_FRAMEWORK_PATH']=str(APP/'Frameworks')
@@ -122,7 +122,7 @@ def main():
         # Read the greeting before negotiating QMP.
         qmp.recv(65536);command('qmp_capabilities');qmp.recv(65536)
         with open(runtime/'display.log','ab',buffering=0) as log:
-            view=sp.Popen([str(APP/'MacOS/LinuxHostSPICE')],env=env,stdout=log,stderr=log);children.append(view)
+            view=sp.Popen([str(APP/'MacOS/AshackyLauncher')],env=env,stdout=log,stderr=log);children.append(view)
         time.sleep(.4);command('cont');print('QMP cont sent at '+time.strftime('%Y-%m-%d %H:%M:%S'),flush=True);shutdown_deadline=None;retries=[]
         print('Standalone VM started at '+time.strftime('%Y-%m-%d %H:%M:%S')+' supervisor='+str(os.getpid()),flush=True)
         video_retries=[]
@@ -140,7 +140,7 @@ def main():
                     retries=[t for t in retries if time.monotonic()-t<60]
                     if len(retries)>=3:raise RuntimeError('Display repeatedly crashed; stopping guest')
                     retries.append(time.monotonic())
-                    with open(runtime/'display.log','ab',buffering=0) as log:view=sp.Popen([str(APP/'MacOS/LinuxHostSPICE')],env=env,stdout=log,stderr=log);children.append(view)
+                    with open(runtime/'display.log','ab',buffering=0) as log:view=sp.Popen([str(APP/'MacOS/AshackyLauncher')],env=env,stdout=log,stderr=log);children.append(view)
             if shutdown_deadline and time.monotonic()>shutdown_deadline:raise RuntimeError('Guest shutdown timed out')
             if select.select([qmp],[],[],.3)[0]:
                 chunk=qmp.recv(65536)

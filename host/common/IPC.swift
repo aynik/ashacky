@@ -132,7 +132,7 @@ func copyStream(from source: Int32, to destination: Int32) {
 }
 
 /// Retain for the entire listener lifetime; private directory validated by caller.
-final class WorkbenchProcessLock {
+final class ServiceProcessLock {
     private let fd: Int32
     init(path: String) throws {
         fd = Darwin.open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)

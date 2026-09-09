@@ -2,9 +2,9 @@
 
 A dedicated macOS account that opens directly into a Linux desktop, with macOS handling the hardware underneath.
 
-Ashacky combines QEMU/HVF, an independent CocoaSpice frontend, macOS device helpers and a small set of Linux integrations. The working prototype runs Debian/GNOME on an M1 MacBook Air, including accelerated graphics, native Wi-Fi and Bluetooth controls, audio device selection, camera, multitouch, USB storage and synchronized sessions.
+Ashacky combines QEMU/HVF, one Ashacky.app containing the CocoaSpice frontend and macOS device services and a small set of Linux integrations. The working prototype runs Debian/GNOME on an M1 MacBook Air, including accelerated graphics, native Wi-Fi and Bluetooth controls, audio device selection, camera, multitouch, USB storage and synchronized sessions.
 
-**This repository is the first source consolidation. The existing installation works; a fresh installation from this checkout has not yet been validated.** Build/staging recipes and validation limits are listed in [BUILD.md](docs/BUILD.md) and [STATUS.md](docs/STATUS.md). Do not switch an existing working installation to this tree yet.
+**This repository is the first source consolidation. The existing installation works; a fresh installation from this checkout has not yet been validated.** Build/staging recipes and validation limits are listed in [BUILD.md](docs/BUILD.md) and [STATUS.md](docs/STATUS.md). Migration of the reference installation is in progress; fresh installations still require attended acceptance.
 
 ## Intended installation
 

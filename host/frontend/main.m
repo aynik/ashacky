@@ -1,6 +1,8 @@
 #import <Cocoa/Cocoa.h>
 #import <MetalKit/MetalKit.h>
 #import <AVFoundation/AVFoundation.h>
+#include <fcntl.h>
+#include <unistd.h>
 #import "CSConnection.h"
 #import "CSMain.h"
 #import "CSInput.h"
@@ -16,6 +18,7 @@
 #import "CSUSBDevice.h"
 #import "CSPort.h"
 #import "CSPortDelegate.h"
+#import "AshackyHost-Swift.h"
 
 @interface CSUSBManager (LinuxHostFilter)
 - (void)setRedirectOnConnectFilter:(NSString *)filter;
@@ -53,6 +56,8 @@
 @end
 @implementation DisplaySlot @end
 @interface App : NSObject<NSApplicationDelegate,CSConnectionDelegate,NSWindowDelegate,CSPortDelegate>
+@property(nonatomic,strong) AshackyHostServices *hostServices;
+@property(nonatomic) BOOL setupMode;
 @property(nonatomic,strong) HostWindow *window;
 @property(nonatomic,strong) GuestView *view;
 @property(nonatomic,strong) CSMetalRenderer *renderer;
@@ -221,6 +226,20 @@
 - (void)applicationDidBecomeActive:(NSNotification *)n { [self updateHostCursor]; }
 - (void)windowDidBecomeKey:(NSNotification *)n { [self updateHostCursor]; }
 - (void)applicationDidFinishLaunching:(NSNotification *)n {
+ signal(SIGPIPE,SIG_IGN);
+ NSArray<NSString *> *args=NSProcessInfo.processInfo.arguments;
+ self.setupMode=[args containsObject:@"--setup"] || !NSProcessInfo.processInfo.environment[@"LINUXHOST_SPICE_SOCKET"];
+ NSString *directory=NSProcessInfo.processInfo.environment[@"ASHACKY_PRIVATE_DIRECTORY"];
+ NSUInteger setupIndex=[args indexOfObject:@"--setup"];
+ if(setupIndex!=NSNotFound && setupIndex+1<args.count) directory=args[setupIndex+1];
+ if(!directory) directory=[NSHomeDirectory() stringByAppendingPathComponent:@".ashacky"];
+ self.hostServices=[AshackyHostServices new];
+ NSError *serviceError=nil;
+ if(![self.hostServices startAtDirectory:directory error:&serviceError]) {
+  NSLog(@"Ashacky host services failed: %@",serviceError.localizedDescription);
+  exit(EXIT_FAILURE);
+ }
+ if(self.setupMode) { [self.hostServices showPermissions]; return; }
  self.borderless=YES;
  self.slots=[NSMutableArray array];self.displays=[NSMutableDictionary dictionary];
  NSScreen *screen=NSScreen.screens.firstObject;
@@ -286,7 +305,7 @@
  if(secondary && self.slots.count==1) {
   DisplaySlot *slot=[DisplaySlot new];slot.screenID=secondary.deviceDescription[@"NSScreenNumber"];
   slot.window=[[HostWindow alloc] initWithContentRect:secondary.frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
-  slot.window.title=@"Debian — External display";slot.window.delegate=self;slot.window.backgroundColor=NSColor.blackColor;slot.window.acceptsMouseMovedEvents=YES;slot.window.releasedWhenClosed=NO;
+  slot.window.title=[NSString stringWithFormat:@"%@ — External display",NSProcessInfo.processInfo.environment[@"LINUXHOST_TITLE"] ?: @"Linux"];slot.window.delegate=self;slot.window.backgroundColor=NSColor.blackColor;slot.window.acceptsMouseMovedEvents=YES;slot.window.releasedWhenClosed=NO;
   slot.view=[[GuestView alloc] initWithFrame:NSMakeRect(0,0,secondary.frame.size.width,secondary.frame.size.height) device:MTLCreateSystemDefaultDevice()];
   slot.view.app=self;slot.view.input=self.sharedInput;slot.view.allowedTouchTypes=NSTouchTypeMaskIndirect;slot.view.wantsRestingTouches=YES;slot.view.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;slot.view.clearColor=MTLClearColorMake(0,0,0,1);
   slot.window.contentView=slot.view;slot.renderer=[[CSMetalRenderer alloc] initWithMetalKitView:slot.view];slot.view.delegate=slot.renderer;
@@ -342,7 +361,7 @@
 - (void)windowDidResize:(NSNotification *)n { [self resizeDisplay]; }
 - (void)windowDidResignKey:(NSNotification *)n { [self setHostCursorHidden:NO]; for(DisplaySlot *slot in self.slots) if(slot.window==n.object) [slot.view releaseGuestKeys]; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
-- (void)applicationWillTerminate:(NSNotification *)n { [self setHostCursorHidden:NO]; [self.connection disconnect]; }
+- (void)applicationWillTerminate:(NSNotification *)n { [self setHostCursorHidden:NO]; [self.connection disconnect]; [self.hostServices stop]; }
 - (void)spiceConnected:(CSConnection *)c { dispatch_async(dispatch_get_main_queue(), ^{ NSLog(@"SPICE connected");
  c.usbManager.isAutoConnect=NO;
  }); }
@@ -377,6 +396,12 @@
 - (void)spiceForwardedPortClosed:(CSConnection *)c port:(CSPort *)p { dispatch_async(dispatch_get_main_queue(), ^{}); }
 @end
 int main(int argc,const char **argv) {
+ const char *logPath=getenv("ASHACKY_DISPLAY_LOG");
+ if(logPath) {
+  int fd=open(logPath,O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW,0600);
+  if(fd<0) return EXIT_FAILURE;
+  dup2(fd,STDOUT_FILENO);dup2(fd,STDERR_FILENO);close(fd);
+ }
  @autoreleasepool { NSApplication *app=HostApplication.sharedApplication; [app setActivationPolicy:NSApplicationActivationPolicyRegular]; App *delegate=[App new]; app.delegate=delegate; [app run]; }
  return 0;
 }
