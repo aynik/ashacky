@@ -30,6 +30,10 @@ Output master volume and mute are linked after an authorized clean VM restart; t
 
 Outputs without writable master level and mute retain local software volume. Microphone controls and per-application gain remain separate. Physical output switching/hotplug, fixed-volume hardware and rapid concurrent control changes have not been retested for this refinement. See [audio architecture](ARCHITECTURE.md#audio-management-events) for recovery and gain-transition limits.
 
+## Launcher exit observation
+
+The active launcher replaces its 200 ms app-exit poll with KVO and a shutdown-only, three-second forced-termination deadline. Thirteen native fixture scenarios passed without opening a VM, desktop window or hardware device. In separate five-second idle samples, the old launcher recorded 256 context switches and the candidate recorded 2; these include framework activity and are not a battery-life benchmark. The reference installation completed a clean VM restart and the owner returned to Debian. The expected launcher remains active, permissions remain allowed and guest services are healthy. Full macOS logout/login and sleep/wake have not been retested for this refinement.
+
 ## Bluetooth management behavior
 
 The native notification path and guest BlueZ event consumer are installed after an authorized clean VM restart. Native event mode, facade restart, radio-watchdog health and the existing audio path passed runtime readback. The owner confirmed fast Bluetooth disconnect/reconnect updates, and the guest trace recorded both connected-state changes promptly after their revision tokens. Fresh pairing, physical host-radio toggles and discovery with new hardware have not been retested with this refinement. The update retains a 60-second reconciliation for external changes that lack a notification, two-second compatibility refresh for old/stale hosts, and bounded operation-status checks while a command is outstanding. Active scans can still delay device-management replies until their bounded inquiry finishes.

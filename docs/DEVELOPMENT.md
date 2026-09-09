@@ -54,6 +54,18 @@ upower -e
 
 The agent abandons an event stream after 25 seconds without data and attempts the RPC fallback. The feeder accepts cache snapshots up to 20 seconds old; the kernel watchdog marks telemetry unavailable after roughly 30–35 seconds without a valid write. Suspend can pause these timers; verify recovery on wake separately. Loss of telemetry must not be presented as a new charger event.
 
+### Updating launcher exit observation
+
+Use the [frontend-only validation recipe](BUILD.md#frontend-only-validation-while-the-vm-runs). `check-runtime.py` exercises the candidate launcher against a temporary, windowless test app with no device services, VM connection, entitlements or permission requests. It checks fast clean exits, exits without a clean receipt, forced crashes, SIGTERM/SIGINT, idle survival, stopping before application launch finishes, refusal to quit, repeated stop signals and launch failure. A mismatched private runtime directory is rejected before opening an app. The test registration, processes and temporary files are cleaned up afterward. Run it from an active macOS GUI account; Command Line Tools suffice.
+
+For a focused rerun against an already built candidate:
+
+```sh
+python3 tools/check-launcher.py --launcher build/frontend-review/Ashacky.app/Contents/MacOS/AshackyLauncher
+```
+
+Keep the real app, launcher and supervisor running until the candidate passes. Switch the signed bundle at the installation's existing canonical path during a clean VM stop, as described in BUILD.md; do not modify a running bundle or launch the Ashacky executable directly. There is no guest payload, new job, QEMU setting or permission change for this refinement. After restart, check one live launcher, the expected frontend launch record and working desktop/device integration. Retire the temporary previous app only after acceptance and record the installed executable hashes. The three-second shutdown grace remains; no timer runs merely to check that the app is still alive.
+
 ### Updating audio event delivery
 
 Install `audio_pipewire.py`, `audio_events.py` and `audio_volume.py` together from the guest manifest, then restart the guest user's `linuxhost-audio-pipewire.service`. The client requires the distro's PyGObject/GIO bindings (Debian `python3-gi`, already needed by the Bluetooth facade) and PipeWire's `pw-dump`, `pw-loopback`, `pw-cli` and `wpctl`. Both companions must be in the same installed directory as the audio script. For volume support, also update `device_service.py` and restart `linuxhost-probe-management.service` to install its bounded output-volume request validator. Record new and replaced files in the private receipt.

@@ -29,15 +29,45 @@ configuration.environment = environment.merging([
 ]) { _, value in value }
 var application: NSRunningApplication?
 var stopping = false
-var stopTime: TimeInterval?
+var stopDeadline: TimeInterval?
+var terminationObservation: NSKeyValueObservation?
+var forceStop: DispatchWorkItem?
+// NSRunningApplication.terminated is KVO-observable. Include its initial
+// value so a fast exit before observer registration cannot be missed.
+func applicationExited(_ running: NSRunningApplication) {
+    guard running.isTerminated else { return }
+    forceStop?.cancel()
+    terminationObservation?.invalidate()
+    let clean = (try? String(contentsOf: receipt, encoding: .utf8)) == "clean\n"
+    try? FileManager.default.removeItem(at: receipt)
+    exit(clean || stopping ? 0 : 1)
+}
+
+func stopApplication() {
+    guard let application, let stopDeadline else { return }
+    applicationExited(application)
+    application.terminate()
+    guard forceStop == nil else { return }
+    let force = DispatchWorkItem {
+        applicationExited(application)
+        application.forceTerminate()
+    }
+    forceStop = force
+    // If shutdown began before LaunchServices replied, only the remaining
+    // grace period is available. Repeated signals never extend the deadline.
+    let remaining = max(0, stopDeadline - ProcessInfo.processInfo.systemUptime)
+    DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: force)
+}
+
 var signals: [DispatchSourceSignal] = []
 for number in [SIGTERM, SIGINT] {
     signal(number, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
     source.setEventHandler {
+        guard !stopping else { return }
         stopping = true
-        stopTime = ProcessInfo.processInfo.systemUptime
-        application?.terminate()
+        stopDeadline = ProcessInfo.processInfo.systemUptime + 3
+        stopApplication()
     }
     source.resume(); signals.append(source)
 }
@@ -48,20 +78,12 @@ NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { r
             exit(1)
         }
         application = running
-        if stopping { running.terminate() }
+        terminationObservation = running.observe(\.isTerminated, options: [.initial, .new]) { observed, _ in
+            DispatchQueue.main.async { applicationExited(observed) }
+        }
+        if stopping { stopApplication() }
         print("Ashacky app launched: PID \(running.processIdentifier)")
         fflush(stdout)
-    }
-}
-let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
-    guard let application else { return }
-    if application.isTerminated {
-        let clean = (try? String(contentsOf: receipt, encoding: .utf8)) == "clean\n"
-        try? FileManager.default.removeItem(at: receipt)
-        exit(clean || stopping ? 0 : 1)
-    }
-    if let stopTime, ProcessInfo.processInfo.systemUptime - stopTime > 3 {
-        application.forceTerminate()
     }
 }
 RunLoop.main.run()

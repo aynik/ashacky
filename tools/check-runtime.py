@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,8 @@ def main():
                 'host/session/SessionSync.swift', 'host/session/SessionServices.swift', 'tests/session-services.swift')],
             '-o', str(session_check)], check=True)
         subprocess.run([str(session_check)], check=True, timeout=10)
+        subprocess.run([sys.executable, str(ROOT / 'tools/check-launcher.py'),
+            '--launcher', str(contents / 'MacOS/AshackyLauncher')], check=True, timeout=90)
         assert 'hvf' in run('qemu-system-aarch64', '-accel', 'help')
         devices = run('qemu-system-aarch64', '-device', 'help')
         for device in ('virtio-ramfb-gl', 'usb-redir', 'linuxhost-shmem', 'virtio-9p-pci'):
