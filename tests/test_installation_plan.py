@@ -41,7 +41,14 @@ class InstallationPlanTests(unittest.TestCase):
             # The frontend owns permission services; no second app can race its listeners.
             jobs = [plistlib.loads(path.read_bytes()) for path in (output / 'host/LaunchAgents').glob('*.plist')]
             self.assertEqual({job['Label'].rsplit('.', 1)[-1] for job in jobs},
-                             {'session', 'session-sync', 'control-forward', 'device-forwards', 'h264'})
+                             {'session'})
+            for job in jobs:
+                self.assertEqual(job['AssociatedBundleIdentifiers'], ['local.ashacky.host'])
+            daemons = [plistlib.loads(path.read_bytes()) for path in (output / 'host/LaunchDaemons').glob('*.plist')]
+            for job in daemons:
+                self.assertTrue(job['ProgramArguments'][0].endswith('/service.sh'))
+                self.assertEqual(job['AssociatedBundleIdentifiers'], ['local.ashacky.host'])
+                self.assertTrue(job['StandardErrorPath'].startswith('/var/log/ashacky-'))
             with self.assertRaises(FileExistsError):
                 planner.generate(self.config, output)
 

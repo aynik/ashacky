@@ -23,7 +23,7 @@ flowchart TB
   Memory --> VA
 ```
 
-The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. It connects the network backends, starts host control/video helpers and QEMU, connects the frontend, then continues the guest. It checks for another process using the disk before launch. Frontend and codec retries are bounded. An intentional guest shutdown does not start a new VM.
+The supervisor owns QMP and one private VM disk. A bundled background launcher uses macOS LaunchServices to give Ashacky.app its own permission attribution; it reports clean exits versus crashes and terminates the app when its supervisor stops. It connects the network backends, starts host control/video helpers and QEMU, connects the frontend, then continues the guest. It checks for another process using the disk before launch. SessionSync, SSH forwards and both decoder servers belong to this session, with bounded child restarts and cleanup at exit. An intentional guest shutdown does not start a new VM.
 
 SPICE handles display, cursor, keyboard, audio, clipboard and guest display changes. The frontend creates a borderless display window directly rather than entering a native fullscreen Space after a windowed launch. Its escape shortcut is Control–Option–Shift–F12; a keyboard may require Fn for F12. The source supports two guest outputs; more have not been validated.
 
@@ -42,7 +42,7 @@ SPICE handles display, cursor, keyboard, audio, clipboard and guest display chan
 | Graphics | virtio GPU, VirGL/Venus | Host ANGLE/Metal and Vulkan/MoltenVK stack. Stock guest Mesa; no custom Firefox build. |
 | Video | General VA-API driver | VP9 through VideoToolbox/shared memory; H.264 through the pinned remote FFmpeg decoder. Codec and performance limits are in STATUS.md. |
 
-Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. A manual `--setup` mode presents a single permission window without opening a VM display; normal runtime opens only the Linux display. Socket names retain their existing protocol compatibility names.
+Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. There is no custom permission window. The application requests undecided permissions through the native macOS prompts, one at a time; granted or denied access is not re-prompted. An explicit `--setup PRIVATE_DIRECTORY` mode can request these permissions before the first VM boot. A normal app open starts the installed session job. Socket names retain their existing protocol compatibility names.
 
 ## Session and privilege boundaries
 

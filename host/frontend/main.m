@@ -223,12 +223,29 @@
  [self setHostCursorHidden:NSApp.isActive && v.window.isKeyWindow && v.display!=nil && NSPointInRect(point,v.bounds)];
 }
 - (void)applicationDidResignActive:(NSNotification *)n { [self setHostCursorHidden:NO]; for(DisplaySlot *slot in self.slots) [slot.view releaseGuestKeys]; }
-- (void)applicationDidBecomeActive:(NSNotification *)n { [self updateHostCursor]; }
+- (void)applicationDidBecomeActive:(NSNotification *)n {
+ [self updateHostCursor];
+ [self.hostServices requestMissingPermissions];
+}
 - (void)windowDidBecomeKey:(NSNotification *)n { [self updateHostCursor]; }
 - (void)applicationDidFinishLaunching:(NSNotification *)n {
  signal(SIGPIPE,SIG_IGN);
  NSArray<NSString *> *args=NSProcessInfo.processInfo.arguments;
- self.setupMode=[args containsObject:@"--setup"] || !NSProcessInfo.processInfo.environment[@"LINUXHOST_SPICE_SOCKET"];
+ self.setupMode=[args containsObject:@"--setup"];
+ if(!self.setupMode && !NSProcessInfo.processInfo.environment[@"LINUXHOST_SPICE_SOCKET"]) {
+  // A normal app open starts its installed session; setup is an explicit mode.
+  NSTask *start=[NSTask new];start.executableURL=[NSURL fileURLWithPath:@"/bin/launchctl"];
+  start.arguments=@[@"kickstart",[NSString stringWithFormat:@"gui/%u/local.ashacky.%u.session",getuid(),getuid()]];
+  NSError *error=nil;
+  if(![start launchAndReturnError:&error]) NSLog(@"Could not start Ashacky session: %@",error);
+  else [start waitUntilExit];
+  if(error || start.terminationStatus!=0) {
+   NSAlert *alert=[NSAlert new];alert.messageText=@"Ashacky’s login service is not available";
+   alert.informativeText=@"Complete the account installation before opening Ashacky. Device permissions can be configured separately with --setup.";
+   [alert runModal];
+  }
+  [NSApp terminate:nil];return;
+ }
  NSString *directory=NSProcessInfo.processInfo.environment[@"ASHACKY_PRIVATE_DIRECTORY"];
  NSUInteger setupIndex=[args indexOfObject:@"--setup"];
  if(setupIndex!=NSNotFound && setupIndex+1<args.count) directory=args[setupIndex+1];
@@ -239,7 +256,7 @@
   NSLog(@"Ashacky host services failed: %@",serviceError.localizedDescription);
   exit(EXIT_FAILURE);
  }
- if(self.setupMode) { [self.hostServices showPermissions]; return; }
+ if(self.setupMode) { [self.hostServices requestMissingPermissions]; return; }
  self.borderless=YES;
  self.slots=[NSMutableArray array];self.displays=[NSMutableDictionary dictionary];
  NSScreen *screen=NSScreen.screens.firstObject;
@@ -280,6 +297,7 @@
  self.pasteboard=[HostPasteboard new]; self.pasteboard.lastChange=NSPasteboard.generalPasteboard.changeCount;
  self.connection.session.pasteboardDelegate=self.pasteboard;
  [self.connection connect];
+ [self.hostServices requestMissingPermissions];
  [NSTimer scheduledTimerWithTimeInterval:1 repeats:YES block:^(NSTimer *t) {
   if (NSApp.isActive && self.pasteboard.lastChange != NSPasteboard.generalPasteboard.changeCount) { self.pasteboard.lastChange=NSPasteboard.generalPasteboard.changeCount; [[NSNotificationCenter defaultCenter] postNotificationName:kCSPasteboardChangedNotification object:self.pasteboard]; }
   static CGSize previousSize;

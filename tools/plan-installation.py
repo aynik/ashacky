@@ -97,13 +97,17 @@ def generate(c, destination):
     def job(name, arguments, system=False, keep=True, extra=None):
         label = f'local.ashacky.{uid}.{name}'
         value = {'Label': label, 'ProgramArguments': list(map(str, arguments)), 'RunAtLoad': True,
-                 'ThrottleInterval': 10, 'Umask': 0o077}
+                 'ThrottleInterval': 10, 'Umask': 0o077,
+                 'AssociatedBundleIdentifiers': ['local.ashacky.host']}
         if keep:
             value['KeepAlive'] = True
         if not system:
             value.update(EnvironmentVariables=env, LimitLoadToSessionType='Aqua',
                 StandardOutPath=str(base / 'logs' / (name + '.log')),
                 StandardErrorPath=str(base / 'logs' / (name + '.log')))
+        if system:
+            log = f'/var/log/ashacky-{uid}-{name}.log'
+            value.update(StandardOutPath=log, StandardErrorPath=log)
         if extra:
             value.update(extra)
         category = 'LaunchDaemons' if system else 'LaunchAgents'
@@ -113,16 +117,23 @@ def generate(c, destination):
 
     job('session', [c['hostPython'], checkout / 'host/session/session.py', '--config', base / 'vm.json'],
         keep=False, extra={'ProcessType': 'Interactive'})
-    job('session-sync', [app / 'MacOS/SessionSync'])
-    job('control-forward', [c['hostPython'], checkout / 'host/session/control-forward.py'])
-    job('device-forwards', [c['hostPython'], checkout / 'host/transport/probe-device-service.py'])
-
-    job('h264', [app / 'MacOS/vtremoted', '--listen', c['hostAddress'] + ':5557'])
     for name in ('shared', 'wifi'):
-        job('network-' + name, [root / 'network.sh', name], system=True)
-    job('usb', [root / 'linuxhost-usb-host'], system=True)
-    job('power', [root / 'LinuxHostPower'], system=True)
+        job('network-' + name, [root / 'service.sh', 'network-' + name], system=True)
+    job('usb', [root / 'service.sh', 'usb'], system=True)
+    job('power', [root / 'service.sh', 'power'], system=True)
     q = lambda value: shlex.quote(str(value))
+    # Every root job initializes the shared parent, regardless of startup order.
+    # install -d creates intermediate directories using umask, so creating only
+    # runtime/network under a 077 launchd umask strands the user behind mode 0700.
+    service = '#!/bin/sh\nset -eu\n'
+    service += 'test ! -L ' + q(runtime) + '\n'
+    service += '/usr/bin/install -d -o root -g ' + q(c['group']) + ' -m 750 ' + q(runtime) + '\n'
+    service += 'case "${1-}" in\n'
+    for name in ('shared', 'wifi'):
+        service += ' network-' + name + ') exec ' + q(root / 'network.sh') + ' ' + name + ' ;;\n'
+    service += ' usb) exec ' + q(root / 'linuxhost-usb-host') + ' ;;\n'
+    service += ' power) exec ' + q(root / 'LinuxHostPower') + ' ;;\n *) exit 2 ;;\nesac\n'
+    write('host/root/service.sh', service, str(root / 'service.sh'), 0o755, 'root:wheel')
     network = '#!/bin/sh\nset -eu\n/usr/bin/install -d -o root -g ' + q(c['group']) + ' -m 750 ' + q(runtime / 'network') + '\n'
     network += 'case "$1" in\n shared) set -- --vmnet-mode=shared --vmnet-gateway=' + q(c['hostAddress']) + ' --vmnet-mask=255.255.255.0 ' + q(runtime / 'network/shared.sock') + ' ;;\n'
     network += ' wifi) interface=$(' + q(root / 'wifi-interface') + '); set -- --vmnet-mode=bridged "--vmnet-interface=$interface" ' + q(runtime / 'network/wifi.sock') + ' ;;\n *) exit 2 ;;\nesac\n'

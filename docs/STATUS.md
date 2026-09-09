@@ -18,7 +18,7 @@ The reference installation was tested on an M1 MacBook Air, macOS 15.7.3, Debian
 
 Upstream sources are now pinned submodules with Ashacky patches applied during preparation. Source recipes prepare from pinned inputs. The documented builds cover the guest modules and VA/FFmpeg stack, SPICE/GStreamer, QEMU, render server, frontend and macOS helpers. The assembled runtime passes relocation, dependency, signature, GPU-shader and silent audio checks without a VM. The audit and its limits are recorded in [VALIDATION.md](VALIDATION.md).
 
-The controlled reference migration has installed the repository-built guest payload with private rollback receipts. Its core services and H.264/VP9 `vaapi-copy` smoke tests pass against the original host. The new host runtime is built and checked but has not yet booted that VM. Source parameterization, a changed account, a clean guest, build dependency changes and regenerated signing identities still require acceptance tests.
+The controlled reference migration has installed the repository-built guest payload with private rollback receipts. Its core services and H.264/VP9 `vaapi-copy` smoke tests pass against the original host. The first host cutover failed before QEMU started because the root runtime parent lacked group traversal permission. The watchdog restored the old host automatically. The reviewed fix initializes that parent explicitly, removes the custom permission panel and consolidates user services under one LaunchAgent; another attended host login is pending. Source parameterization, a changed account, a clean guest, build dependency changes and regenerated signing identities still require acceptance tests.
 
 ## Video limits
 

@@ -8,6 +8,7 @@ final class WiFiService: NSObject, CLLocationManagerDelegate {
     let queue = DispatchQueue(label: "local.ashacky.wifi")
     var processLock: ServiceProcessLock?
     var server: UnixServer?
+    var authorizationChanged: (() -> Void)?
 
     func start(directory: URL) throws {
         processLock = try ServiceProcessLock(path: directory.appendingPathComponent("wifi-workbench.lock").path)
@@ -30,5 +31,5 @@ final class WiFiService: NSObject, CLLocationManagerDelegate {
         guard AshackyHostServices.active() else { return }
         manager.requestWhenInUseAuthorization()
     }
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {}
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) { authorizationChanged?() }
 }

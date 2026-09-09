@@ -11,10 +11,8 @@ import SystemConfiguration
     let camera = CameraService()
     var processLock: ServiceProcessLock?
     var server: UnixServer?
-    var window: NSWindow?
-    var labels: [NSTextField] = []
-    var buttons: [NSButton] = []
-    var timer: Timer?
+    var permissionFlowStarted = false
+    var pendingPermission: String?
     var launcherMonitor: DispatchSourceProcess?
 
     static func active() -> Bool {
@@ -34,6 +32,8 @@ import SystemConfiguration
         try wifi.start(directory: url)
         try bluetooth.start(directory: url)
         try camera.start(directory: url)
+        wifi.authorizationChanged = { [weak self] in self?.advancePermissions() }
+        bluetooth.authorizationChanged = { [weak self] in self?.advancePermissions() }
         // Read authorization without opening a camera stream or scanning devices.
         server = try UnixServer(path: url.appendingPathComponent("host-services.sock").path) { [self] fd, request in
             var uid: uid_t = 0, gid: gid_t = 0
@@ -67,10 +67,14 @@ import SystemConfiguration
             }
         }
         let location: String
-        switch wifi.manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: location = CLLocationManager.locationServicesEnabled() ? "allowed" : "disabled"
-        case .notDetermined: location = "undecided"
-        default: location = "denied"
+        if !CLLocationManager.locationServicesEnabled() {
+            location = "disabled"
+        } else {
+            switch wifi.manager.authorizationStatus {
+            case .authorizedAlways, .authorizedWhenInUse: location = "allowed"
+            case .notDetermined: location = "undecided"
+            default: location = "denied"
+            }
         }
         let bt: String
         switch CBManager.authorization {
@@ -81,64 +85,35 @@ import SystemConfiguration
         return ["location": location, "bluetooth": bt, "camera": av(.video), "microphone": av(.audio)]
     }
 
-    @objc public func showPermissions() {
-        if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: 335),
-                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        win.title = "Ashacky — Permissions"
-        win.isReleasedWhenClosed = false
-        let text = NSTextField(wrappingLabelWithString: "Allow Ashacky to provide these devices to Linux. Location access is required by macOS for Wi-Fi network discovery. Camera and microphone access is used only when Linux requests it.")
-        text.frame = NSRect(x: 24, y: 248, width: 492, height: 64)
-        win.contentView?.addSubview(text)
-        for (index, title) in ["Wi-Fi (Location)", "Bluetooth", "Camera", "Microphone"].enumerated() {
-            let label = NSTextField(labelWithString: title)
-            label.frame = NSRect(x: 24, y: 197 - index * 48, width: 330, height: 24)
-            labels.append(label); win.contentView?.addSubview(label)
-            let button = NSButton(title: "Allow", target: self, action: #selector(requestPermission(_:)))
-            button.tag = index
-            button.frame = NSRect(x: 372, y: 192 - index * 48, width: 144, height: 32)
-            buttons.append(button); win.contentView?.addSubview(button)
-        }
-        window = win
-        refreshPermissions()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshPermissions() }
-        win.center(); win.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    /// Use the system's own prompts, one at a time. Previously denied access
+    /// remains under the user's control in System Settings; it is not re-prompted.
+    @objc public func requestMissingPermissions() {
+        permissionFlowStarted = true
+        advancePermissions()
     }
 
-    func refreshPermissions() {
+    func advancePermissions() {
+        guard permissionFlowStarted, Self.active() else { return }
         let state = permissions()
-        for (index, key) in ["location", "bluetooth", "camera", "microphone"].enumerated() {
-            let allowed = state[key] == "allowed"
-            let title = ["Wi-Fi (Location)", "Bluetooth", "Camera", "Microphone"][index]
-            labels[index].stringValue = title + " — " + (state[key] ?? "unknown").capitalized
-            buttons[index].isEnabled = !allowed && Self.active()
-            buttons[index].title = allowed ? "Allowed" : state[key] == "undecided" ? "Allow" : "Open Settings"
-        }
-        bluetooth.prepareCentral()
-    }
-
-    @objc func requestPermission(_ sender: NSButton) {
-        guard Self.active() else { return }
-        let keys = ["location", "bluetooth", "camera", "microphone"]
-        guard keys.indices.contains(sender.tag) else { return }
-        if permissions()[keys[sender.tag]] != "undecided" {
-            let panels = ["Privacy_LocationServices", "Privacy_Bluetooth", "Privacy_Camera", "Privacy_Microphone"]
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + panels[sender.tag]) {
-                NSWorkspace.shared.open(url)
-            }
+        if let pendingPermission, state[pendingPermission] == "undecided" { return }
+        pendingPermission = nil
+        guard let key = ["location", "bluetooth", "camera", "microphone"].first(where: { state[$0] == "undecided" }) else {
+            permissionFlowStarted = false
+            NSLog("Ashacky permissions: %@", state)
             return
         }
-        switch sender.tag {
-        case 0: wifi.requestAuthorization()
-        case 1: bluetooth.prepareCentral(requestPermission: true)
-        case 2: camera.requestAuthorization()
-        case 3: AVCaptureDevice.requestAccess(for: .audio) { _ in }
-        default: break
+        pendingPermission = key
+        switch key {
+        case "location": wifi.requestAuthorization()
+        case "bluetooth": bluetooth.prepareCentral(requestPermission: true)
+        default:
+            AVCaptureDevice.requestAccess(for: key == "camera" ? .video : .audio) { [weak self] _ in
+                DispatchQueue.main.async { self?.advancePermissions() }
+            }
         }
     }
 
     @objc public func stop() {
-        timer?.invalidate()
         bluetooth.stop()
         camera.shutdown()
         if let path = ProcessInfo.processInfo.environment["ASHACKY_EXIT_RECEIPT"] {

@@ -20,6 +20,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
     var operation: [String: Any]?
     var processLock: ServiceProcessLock?
     var server: UnixServer?
+    var authorizationChanged: (() -> Void)?
     var scanReply: (([String: Any]) -> Void)?
     var lastClassic: [[String: Any]] = []
 
@@ -166,6 +167,7 @@ final class BluetoothService: NSObject, CBCentralManagerDelegate, IOBluetoothDev
         } else { completion(["ok": false, "error": "Unsupported Bluetooth operation"]) }
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        authorizationChanged?()
         if central.state != .poweredOn && scanning { finish() }
         beginIfReady()
     }

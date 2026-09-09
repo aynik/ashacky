@@ -143,7 +143,7 @@ swift build --package-path build/sources/videotoolbox-remote/vtremoted \
   --scratch-path build/host/vtremoted-build -c release
 ```
 
-The executable is `build/host/vtremoted-build/release/vtremoted`. Include it in the final bundle and generate a per-user LaunchAgent for it; the VM supervisor currently starts only `LinuxHostVideoShared`. The H.264 listener must match `LH_VIDEO_H264_HOST` in the guest's `/etc/ashacky/video.env`. Use an isolated VM address and the selected port (5557 in the reference topology), never the upstream LAN-wide service-install example. Both LZ4 and Zstandard are dynamically loaded by this server. The bundle patch tries executable-relative library paths first; assembly includes their matching dylibs and stable aliases. The default upstream listener is port 5555, so simply starting it without configuration does not match the guest broker.
+The executable is `build/host/vtremoted-build/release/vtremoted`. Include it in the final bundle; the VM supervisor starts it alongside `LinuxHostVideoShared`, without a separate LaunchAgent. The H.264 listener must match `LH_VIDEO_H264_HOST` in the guest's `/etc/ashacky/video.env`. Use an isolated VM address and the selected port (5557 in the reference topology), never the upstream LAN-wide service-install example. Both LZ4 and Zstandard are dynamically loaded by this server. The bundle patch tries executable-relative library paths first; assembly includes their matching dylibs and stable aliases. The default upstream listener is port 5555, so simply starting it without configuration does not match the guest broker.
 
 ## Pinned UTM binary assets
 

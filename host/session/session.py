@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """One VM per dedicated login. QMP verifies shutdown before host power actions."""
-import argparse, fcntl, json, os, pathlib, pwd, select, signal, socket, subprocess as sp, time
+import argparse, errno, fcntl, json, os, pathlib, pwd, select, signal, socket, subprocess as sp, time
 APP=pathlib.Path(__file__).resolve().parents[2]/'build/host/Ashacky.app/Contents'
 STOP=False
 
@@ -47,6 +47,7 @@ def arguments(c, network_fds):
 
 def main():
     global STOP,APP
+    from user_services import UserServices
     p=argparse.ArgumentParser();p.add_argument('--config',required=True);p.add_argument('--check',action='store_true');args=p.parse_args()
     print('Login supervisor entered at '+time.strftime('%Y-%m-%d %H:%M:%S'),flush=True)
     c=json.loads(pathlib.Path(args.config).read_text()); control=json.loads(pathlib.Path(c['control']).read_text())
@@ -84,6 +85,13 @@ def main():
     env['DYLD_FRAMEWORK_PATH']=str(APP/'Frameworks')
     env['DYLD_FALLBACK_FRAMEWORK_PATH']=str(APP/'Frameworks')+':/System/Library/Frameworks'
     for sig in (signal.SIGTERM,signal.SIGINT): signal.signal(sig,lambda *_:globals().__setitem__('STOP',True))
+    source=pathlib.Path(__file__).resolve().parents[2]
+    services=UserServices({
+        'session-sync':[str(APP/'MacOS/SessionSync')],
+        'control-forward':[os.sys.executable,str(source/'host/session/control-forward.py')],
+        'device-forwards':[os.sys.executable,str(source/'host/transport/probe-device-service.py')],
+        'h264':[str(APP/'MacOS/vtremoted'),'--listen',c['videoBindAddress']+':5557'],
+    },env,runtime.parent/'logs')
     networks=[];children=[];qemu=None;view=None;clean=False;buffer=b''
     try:
         # LaunchAgents and root network helpers have no guaranteed startup order.
@@ -94,11 +102,14 @@ def main():
                 if STOP:raise RuntimeError('Login startup cancelled')
                 s=socket.socket(socket.AF_UNIX);s.settimeout(3)
                 try:s.connect(path);networks.append(s);break
-                except OSError:
+                except OSError as error:
                     s.close()
+                    if error.errno in (errno.EACCES, errno.EPERM):
+                        raise RuntimeError('Network socket access denied: '+path+'; check ownership, directory traversal permissions and account groups') from error
                     if time.monotonic()>deadline:raise RuntimeError('Network helper did not become ready: '+path)
                     time.sleep(.5)
         print('Network helpers ready at '+time.strftime('%Y-%m-%d %H:%M:%S'),flush=True)
+        services.start_all()
         with open(runtime/'control.log','ab',buffering=0) as log:
             children.append(sp.Popen([str(APP/'MacOS/LinuxHostControl')],env=env,stdout=log,stderr=log))
         # A fresh, private mapping for this QEMU session; no pixel traffic over TCP.
@@ -127,6 +138,7 @@ def main():
         print('Standalone VM started at '+time.strftime('%Y-%m-%d %H:%M:%S')+' supervisor='+str(os.getpid()),flush=True)
         video_retries=[]
         while qemu.poll() is None:
+            if not STOP and shutdown_deadline is None:services.poll()
             if video.poll() is not None and not STOP and shutdown_deadline is None:
                 video_retries=[t for t in video_retries if time.monotonic()-t<60]
                 if len(video_retries)<3:
@@ -166,6 +178,7 @@ def main():
         for child in children:
             try:child.wait(timeout=5)
             except sp.TimeoutExpired:child.kill()
+        services.stop()
         for s in networks:s.close()
         print('Standalone session stopped',flush=True)
 if __name__=='__main__':main()

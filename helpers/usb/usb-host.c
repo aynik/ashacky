@@ -101,6 +101,9 @@ static void serve(int fd){
 int main(void){
  if(geteuid()!=0)return 1;struct sigaction stop={0};stop.sa_handler=stop_signal;sigemptyset(&stop.sa_mask);sigaction(SIGTERM,&stop,NULL);sigaction(SIGINT,&stop,NULL);signal(SIGPIPE,SIG_IGN);signal(SIGCHLD,SIG_IGN);umask(0077);
  mkdir(ASHACKY_USB_DIRECTORY,0755);chmod(ASHACKY_USB_DIRECTORY,0755);
+ /* Refuse a second supervisor before it can unlink the live listening socket. */
+ int instance=open(ASHACKY_USB_DIRECTORY "/service.lock",O_CREAT|O_RDWR|O_NOFOLLOW|O_CLOEXEC,0600);
+ if(instance<0||flock(instance,LOCK_EX|LOCK_NB))return 3;
  int fd=socket(AF_UNIX,SOCK_STREAM,0);struct sockaddr_un a={0};a.sun_family=AF_UNIX;strlcpy(a.sun_path,ENDPOINT,sizeof(a.sun_path));unlink(ENDPOINT);
  if(bind(fd,(struct sockaddr*)&a,sizeof(a))||listen(fd,4))return 2;
  chown(ENDPOINT,ASHACKY_USER_ID,ASHACKY_GROUP_ID);chmod(ENDPOINT,0600);
