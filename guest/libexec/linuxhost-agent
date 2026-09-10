@@ -3,6 +3,7 @@
 import json
 import os
 import pathlib
+import re
 import select
 import socket
 import struct
@@ -13,7 +14,8 @@ import time
 CONFIG = pathlib.Path('/etc/linuxhost.json')
 RUNTIME = pathlib.Path('/run/linuxhost')
 STATUS_PORT = pathlib.Path('/dev/virtio-ports/org.ashacky.status')
-ALLOWED = {'status', 'powercheck', 'lock', 'sleep', 'poweroff', 'restart', 'logout', 'authenticate'}
+ALLOWED = {'status', 'powercheck', 'lock', 'sleep', 'poweroff', 'restart', 'logout', 'authenticate',
+           'display-list', 'display-connect', 'display-disconnect'}
 
 def host_request(request):
     config = json.loads(CONFIG.read_text())
@@ -111,7 +113,50 @@ def authorize(request, uid, desktop_uid):
     outgoing = {'action': action}
     if action == 'authenticate':
         outgoing['purpose'] = request['purpose']
+    if action in ('display-connect', 'display-disconnect'):
+        target = request.get('id')
+        if not isinstance(target, str) or re.fullmatch(r'sidecar:[0-9a-f]{64}', target) is None:
+            raise ValueError('Invalid display destination')
+        outgoing['id'] = target
     return outgoing
+
+
+def serve_client(client):
+    with client:
+        client.settimeout(5)
+        try:
+            _, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            payload = client.makefile('rb').readline(4096)
+            if not payload.endswith(b'\n'):
+                raise ValueError('Invalid request')
+            outgoing = authorize(json.loads(payload), uid, json.loads(CONFIG.read_text())['userID'])
+            result = host_request(outgoing)
+            client.sendall(json.dumps(result).encode() + b'\n')
+            if result.get('ok') and result.get('shutdownGuest'):
+                subprocess.run(['systemctl', 'poweroff', '--no-block'], timeout=10, check=True)
+        except Exception as error:
+            try:
+                client.sendall(json.dumps({'ok': False, 'error': str(error)}).encode() + b'\n')
+            except OSError:
+                pass
+
+
+class ClientWorkers:
+    """Bounded concurrent RPC: a display connection must not delay screen lock."""
+    def __init__(self, limit=8):
+        self.slots = threading.BoundedSemaphore(limit)
+
+    def start(self, client):
+        if not self.slots.acquire(blocking=False):
+            client.close()
+            return False
+        def work():
+            try:
+                serve_client(client)
+            finally:
+                self.slots.release()
+        threading.Thread(target=work, daemon=True).start()
+        return True
 
 
 def serve():
@@ -122,26 +167,11 @@ def serve():
         server.bind(str(endpoint))
         endpoint.chmod(0o666)  # Peer UID is checked below, including for read operations.
         server.listen(8)
+        workers = ClientWorkers()
         threading.Thread(target=refresh_status, daemon=True).start()
         while True:
             client, _ = server.accept()
-            with client:
-                client.settimeout(5)
-                try:
-                    _, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                    payload = client.makefile('rb').readline(4096)
-                    if not payload.endswith(b'\n'):
-                        raise ValueError('Invalid request')
-                    outgoing = authorize(json.loads(payload), uid, json.loads(CONFIG.read_text())['userID'])
-                    result = host_request(outgoing)
-                    client.sendall(json.dumps(result).encode() + b'\n')
-                    if result.get('ok') and result.get('shutdownGuest'):
-                        subprocess.run(['systemctl', 'poweroff', '--no-block'], timeout=10, check=True)
-                except Exception as error:
-                    try:
-                        client.sendall(json.dumps({'ok': False, 'error': str(error)}).encode() + b'\n')
-                    except OSError:
-                        pass
+            workers.start(client)
 
 if __name__ == '__main__':
     serve()

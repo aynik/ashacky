@@ -9,7 +9,7 @@ flowchart TB
   Login[macOS login / dedicated account] --> Session[VM supervisor]
   Session --> QEMU[QEMU + HVF]
   Session --> Frontend
-  subgraph App[Ashacky.app — one user process]
+  subgraph App[Ashacky.app]
     Frontend[CocoaSpice / Metal + device services]
     Control[Touch ID, battery and session actions]
   end
@@ -49,6 +49,7 @@ Metal completes a scanout copy asynchronously, then acknowledges the frame on th
 | Touch ID | PAM authentication | macOS LocalAuthentication performs authentication. Enrollment stays on macOS. Linux password fallback remains available. |
 | Passkeys (optional prototype) | UHID FIDO2 security key | Host Secure Enclave signing with native Touch ID/Mac password authorization. Disabled in fresh plans; reference browser checks passed, with remaining acceptance in [FIDO2.md](FIDO2.md). |
 | Graphics | virtio GPU, VirGL/Venus | Host ANGLE/Metal and Vulkan/MoltenVK stack. Stock guest Mesa; no custom Firefox build. |
+| Sidecar display controls | Existing GNOME extension and virtual GPU output | On-demand discovery/connect/disconnect over private SPICE control; an embedded child uses macOS Sidecar. One external screen. Acceptance and remaining limits are recorded in [SIDECAR.md](SIDECAR.md). |
 | Video | General VA-API driver | VP9 through VideoToolbox/shared memory; H.264 through the pinned remote FFmpeg decoder. Codec and performance limits are in STATUS.md. |
 
 Linux modules expose virtual interfaces; they are not Asahi physical-device drivers. Brightness and keyboard backlight remain host-key functions. The CocoaSpice frontend and Wi-Fi, Bluetooth/audio and camera services are linked into one executable in Ashacky.app, with bundle identifier `local.ashacky.host`. The application owns Location, Bluetooth, Camera and Microphone permissions. There is no custom permission window. The application requests undecided permissions through the native macOS prompts, one at a time; granted or denied access is not re-prompted. An explicit `--setup PRIVATE_DIRECTORY` mode can request these permissions before the first VM boot. A normal app open starts the installed session job. The root guest control sockets live in `/run/ashacky-control`; host device sockets retain their compatibility names.

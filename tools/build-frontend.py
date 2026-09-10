@@ -101,7 +101,7 @@ def main():
     inputs += [gst, ROOT / 'host/frontend/main.m']
     host_sources = [ROOT / 'host/common/IPC.swift', *[ROOT / 'host/devices' / name for name in
         ('WiFiBackend.swift', 'WiFiService.swift', 'AudioBackend.swift', 'BluetoothService.swift',
-         'CameraBuffer.swift', 'CameraService.swift', 'HostServices.swift')]]
+         'CameraBuffer.swift', 'CameraService.swift', 'HostServices.swift', 'SidecarService.swift')]]
     host_sources += [ROOT / name for name in ('host/control/Control.swift', 'host/control/PowerObserver.swift',
         'host/session/ControlChannel.swift', 'host/session/SessionServices.swift',
         'host/auth/CBOR.swift', 'host/auth/FIDO2.swift', 'host/auth/FIDO2Service.swift')]
@@ -131,6 +131,8 @@ def main():
     run(['swiftc', *compiled, *link_flags, '-o', contents / 'MacOS/Ashacky'])
     run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/frontend/Launcher.swift',
          '-o', contents / 'MacOS/AshackyLauncher'])
+    run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/devices/SidecarBackend.swift',
+         ROOT / 'tools/sidecar-probe.swift', '-o', contents / 'MacOS/AshackySidecar'])
     # Retire the old frontend name when rebuilding an existing output directory.
     (contents / 'MacOS/LinuxHostSPICE').unlink(missing_ok=True)
     for name in ('LinuxHostControl', 'SessionSync'):

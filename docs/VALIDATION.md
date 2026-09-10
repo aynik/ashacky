@@ -278,3 +278,47 @@ The same fixture linked against the assembled candidate returns promptly and que
 These checks establish functional build/staging reproduction with the recorded host SDK and existing Homebrew prerequisites, not byte-identical output or clean-machine installation. The isolated audit did not install or boot its outputs. The later controlled migration installed guest services and the PAM module path with password fallback; the reference host cutover now works, while full macOS logout/login after final cleanup and fresh-account acceptance remain pending. The cloud-init seed attachment, fresh-account boot, hardware/session behavior after parameterization, other distro adapters, and receipt-driven migration/uninstall still require attended acceptance. See [INSTALL.md](INSTALL.md).
 
 The host codec compiles in Swift 5 mode with concurrency warnings that require attention before Swift 6 mode. The patched H.264 server emits a Swift pointer-conversion warning at its VideoToolbox hardware-property query, and CocoaSpice emits existing Objective-C warnings. The optional source shader rebuild remains unvalidated because the Metal compiler is absent; the normal release-asset build does not need it.
+
+## Sidecar connection controls
+
+On 2026-09-10 the isolated host helper discovered an awake iPad, connected it,
+disconnected it and connected it again. GNOME removed and restored its second
+logical output; the restored guest mode was 2388×1668. The owner confirmed the
+Sidecar connection. The initial command from an administrative SSH background
+session returned native error -101; the same command in the active user's GUI
+bootstrap session succeeded. The bundled candidate helper also enumerated the
+connected iPad in that GUI context. No guest restart was needed for these native
+connection tests.
+
+The candidate adds the existing GNOME extension's Displays submenu, restricted
+SPICE host actions and an embedded one-operation helper. Four new guest tests
+check target validation, peer authorization, parallel lock delivery, bounded
+client workers and GJS menu-request lifecycle. The complete suite passes 107
+tests; 190 source files pass syntax/privacy checks. Native supervisor fixtures
+cover helper success/failure, timeout, cancellation, malformed/oversized replies
+and rejection while busy or inactive. These fixtures do not connect hardware or
+render real GNOME widgets.
+
+The first candidate assembly picked up an old SPICE client from the build prefix;
+the existing acknowledgement fixture correctly rejected it. Rebuilding and
+installing the patched client in the unused dependency build outputs, then
+rebuilding/reassembling the candidate, passed both acknowledgement tests. Full
+runtime relocation, signatures, 53 Mach-O dependency closures, Metal shader,
+QEMU features, silent audio, control/session, FIDO2, camera and launcher checks
+then passed. The active app was not replaced during validation.
+
+The authorized migration preserved guest originals and a private apply/rollback
+receipt. Its first shutdown attempt timed out because the session supervisor owns
+QMP's single client connection; guest files were restored and the running VM was
+unchanged. A guest-only systemd shutdown then stopped the VM cleanly, allowing the
+validated bundle to replace the app at its canonical path. The existing session
+job started the new app and guest successfully.
+
+After boot, all five installed guest files matched their staged hashes, the GNOME
+extension was active, and `hostctl display-list` succeeded over SPICE. The owner
+confirmed the Displays menu works. A live Mutter observer recorded two logical
+outputs becoming one on disconnect and returning to two on reconnect; final host
+readback reported the iPad connected. The guest agent and private control broker
+remained active with zero automatic restarts. Physical lock/sleep during a pending
+connection, extension disable/enable and unavailable-iPad recovery have not been
+tested on the live desktop; see [SIDECAR.md](SIDECAR.md).

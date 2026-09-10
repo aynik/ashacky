@@ -53,11 +53,18 @@ def main():
         session_check = temporary / 'session-service-checks'
         subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
             *[str(ROOT / name) for name in ('host/common/IPC.swift', 'host/control/Control.swift', 'host/control/PowerObserver.swift',
-                'host/session/ControlChannel.swift', 'host/session/SessionServices.swift',
+                'host/session/ControlChannel.swift', 'host/session/SessionServices.swift', 'host/devices/SidecarService.swift',
                 'host/auth/CBOR.swift', 'host/auth/FIDO2.swift', 'host/auth/FIDO2Service.swift',
                 'tests/control-channel.swift', 'tests/fido2-store.swift', 'tests/session-services.swift')],
             '-o', str(session_check)], check=True)
         subprocess.run([str(session_check)], check=True, timeout=10)
+        sidecar_check = temporary / 'sidecar-service-checks'
+        subprocess.run(['swiftc', '-swift-version', '5', '-O',
+            str(ROOT / 'host/devices/SidecarService.swift'), str(ROOT / 'tests/sidecar-service.swift'),
+            '-o', str(sidecar_check)], check=True)
+        subprocess.run([str(sidecar_check)], check=True, timeout=10)
+        if not (contents / 'MacOS/AshackySidecar').is_file():
+            raise RuntimeError('Missing bundled Sidecar helper')
         peer = temporary / 'control-peer'
         subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
             str(ROOT / 'host/session/ControlChannel.swift'), str(ROOT / 'tests/control-peer.swift'),

@@ -4,6 +4,8 @@ action = sys.argv[1] if len(sys.argv) > 1 else 'status'
 request = {'action': action}
 if action == 'authenticate':
     request['purpose'] = sys.argv[2] if len(sys.argv) > 2 else 'test'
+if action in ('display-connect', 'display-disconnect'):
+    request['id'] = sys.argv[2] if len(sys.argv) > 2 else ''
 try:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(85)

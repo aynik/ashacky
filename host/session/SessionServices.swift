@@ -7,8 +7,8 @@ import AppKit
     @objc public var controlWrite: ((Data, @escaping (Bool) -> Void) -> Void)?
     @objc public var controlFailed: (() -> Void)?
 
-    @objc public func controlOpened() { fido2?.cancelAll(); channel?.close() }
-    @objc public func controlClosed() { fido2?.cancelAll(); channel?.close() }
+    @objc public func controlOpened() { fido2?.cancelAll(); Control.sidecar?.cancel(); channel?.close() }
+    @objc public func controlClosed() { fido2?.cancelAll(); Control.sidecar?.cancel(); channel?.close() }
     @objc public func controlReceived(_ data: Data) { channel?.receive(data) }
     @objc public var statusChanged: (() -> Void)?
 

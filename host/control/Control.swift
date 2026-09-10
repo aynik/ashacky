@@ -31,6 +31,7 @@ enum Control {
     static var lockScreen: () -> Bool = lockHostScreen
     static var statusChanged: (() -> Void)?
     static var powerObserver: PowerObserver?
+    static var sidecar: SidecarService?
     static var enabled: Bool { config["powerEnabled"] as? Bool == true }
     static func active() -> Bool {
         var uid: uid_t = 0
@@ -68,7 +69,11 @@ enum Control {
         if action=="status" { reply(status()); return }
         guard active() else { pending=nil; reply(["ok":false,"error":"The Linux macOS session is not active"]); return }
         switch action {
+        case "display-list", "display-connect", "display-disconnect":
+            guard let sidecar else { reply(["ok": false, "error": "Host display controls are unavailable"]); return }
+            sidecar.request(value, reply: reply)
         case "lock":
+            sidecar?.cancel()
             if lockScreen() { reply(["ok": true]); NSLog("Host lock requested from Linux") }
             else { reply(["ok": false, "error": "macOS screen locking is unavailable"]) }
         case "powercheck": reply(power("check",operation:"poweroff"))
@@ -125,6 +130,10 @@ enum Control {
         config=value
         guard let endpoint=config["socket"] as? String, let token=config["token"] as? String, token.count>=32 else { throw IPCError.message("Invalid control configuration") }
         signal(SIGPIPE,SIG_IGN)
+        if let executable = Bundle.main.executableURL {
+            sidecar = SidecarService(helper: executable.deletingLastPathComponent().appendingPathComponent("AshackySidecar"),
+                                     isActive: { active() && !sleeping })
+        }
         processLock=try ServiceProcessLock(path:endpoint+".lock")
         server=try UnixServer(path:endpoint,mode:0o600) { fd,value in
             var uid:uid_t=0;var gid:gid_t=0
@@ -138,9 +147,9 @@ enum Control {
             return request(value)
         }
         let center=NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;statusChanged?() })
+        observers.append(center.addObserver(forName:NSWorkspace.willSleepNotification,object:nil,queue:.main) { _ in sleeping=true;sidecar?.cancel();statusChanged?() })
         observers.append(center.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { _ in sleeping=false;wake+=1;statusChanged?() })
-        observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;statusChanged?() })
+        observers.append(center.addObserver(forName:NSWorkspace.sessionDidResignActiveNotification,object:nil,queue:.main) { _ in pending=nil;sidecar?.cancel();statusChanged?() })
         observers.append(center.addObserver(forName:NSWorkspace.sessionDidBecomeActiveNotification,object:nil,queue:.main) { _ in statusChanged?() })
         powerObserver=PowerObserver { statusChanged?() }
         if powerObserver == nil { NSLog("Power notifications unavailable; status heartbeat remains active") }
@@ -148,6 +157,7 @@ enum Control {
         NSLog("Ashacky control ready")
     }
     static func stop() {
+        sidecar?.cancel(); sidecar=nil
         pending=nil
         statusChanged=nil
         powerObserver?.stop();powerObserver=nil

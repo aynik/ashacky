@@ -22,6 +22,16 @@ Upstream sources are now pinned submodules with Ashacky patches applied during p
 
 The reference installation now runs from this checkout. After the initial directory-permission failure, a second issue produced a black window: the SPICE client disabled GL scanout when built without EGL, even though the Metal frontend supports IOSurface scanout. The frontend now advertises that capability explicitly; the owner confirmed a working Linux desktop. Native macOS locking and host control are linked into the Ashacky process. Current validation and cleanup are recorded in [VALIDATION.md](VALIDATION.md). Fresh-account and full logout/login acceptance remain separate checks.
 
+## Sidecar display controls
+
+Sidecar controls are active after an attended VM restart. The owner confirmed the
+existing GNOME extension's Displays menu works; live observation recorded Linux
+removing and restoring its second output during the menu's disconnect/reconnect
+test. Discovery and actions use authenticated SPICE control, without idle discovery
+polling or an additional app/LaunchAgent. The accepted scope is one external
+screen. See [SIDECAR.md](SIDECAR.md) for architecture, deadlines, GUI-session
+requirements and remaining tests. AirPlay is not implemented.
+
 ## Audio behavior
 
 Host device hotplug and Linux endpoint selection now use notifications instead of the normal one-second polling loop. The reference output connect/disconnect, selection and sound checks passed; input-device hotplug with this update remains an attended check. An older frontend or stale event channel retains compatibility polling.

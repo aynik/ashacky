@@ -6,6 +6,7 @@ import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {redirectHostLock} from './hostLock.js';
+import {DisplayMenu} from './displayMenu.js';
 
 export default class MacIntegration extends Extension {
     enable() {
@@ -23,6 +24,9 @@ export default class MacIntegration extends Extension {
             this.originalActions[method] = this.systemActions[method];
             this.systemActions[method] = () => title ? this.confirm(title, action) : this.run(action);
         }
+        // A display-UI compatibility failure must not disable session actions.
+        try { this.displays = new DisplayMenu(); }
+        catch (error) { console.error('Ashacky display controls:', error); }
     }
     confirm(title, action) {
         if (this.dialog) return;
@@ -51,6 +55,7 @@ export default class MacIntegration extends Extension {
         });
     }
     disable() {
+        this.displays?.destroy(); this.displays = null;
         this.restoreLock?.(); this.restoreLock = null;
         if (this.systemActions && this.originalActions) {
             for (const [method, original] of Object.entries(this.originalActions)) this.systemActions[method] = original;

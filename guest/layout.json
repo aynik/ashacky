@@ -219,6 +219,12 @@
       "owner": "root:root"
     },
     {
+      "source": "guest/gnome/linuxhost@local/displayMenu.js",
+      "target": "/usr/share/gnome-shell/extensions/linuxhost@local/displayMenu.js",
+      "mode": "0644",
+      "owner": "root:root"
+    },
+    {
       "source": "guest/gnome/linuxhost@local/extension.js",
       "target": "/usr/share/gnome-shell/extensions/linuxhost@local/extension.js",
       "mode": "0644",

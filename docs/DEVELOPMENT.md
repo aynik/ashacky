@@ -223,3 +223,41 @@ Preserve the active app, supervisor source, camera service files, broker, video-
 After boot, confirm one 64 MiB video BAR and one 8 MiB camera BAR. Both camera resource files must remain root-owned mode 0600; only the existing video resource is granted to the desktop. Verify the video-memory link still resolves to the 64 MiB BAR. Read a bounded set of camera frames into a discard sink, check dimensions/rate, close it and verify the host capture stopped, the shared slots cleared and the guest returned to black. Check an ordinary camera app, repeated demand, a stream longer than 30 seconds and recovery after losing the broker. Check that no runtime process invokes `probe-ssh`, `vm-ssh.py` or an SSH forward. Owner/agent administrative SSH may still be running separately.
 
 Remove the obsolete camera forwarding child and unused SSH environment fields from the user job at the clean stop. Preserve owner administration and any keys still used for it. Rollback requires the previous app, supervisor/topology and guest files together, including the old video-memory selector and SSH camera forward/configuration; restoring only the camera Python file is insufficient. Keep paired recovery material until attended acceptance, then remove temporary runtime copies and retain the installation receipt.
+
+### Updating Sidecar controls
+
+Build and validate the frontend in a temporary output directory using BUILD.md.
+The helper is `Contents/MacOS/AshackySidecar` inside the same app, not an installed
+CLI, permission app or separate login service. `check-runtime.py` exercises the
+helper supervisor with disposable native fixtures; it does not connect an iPad.
+If the SPICE acknowledgement check reports an unqueued message, rebuild the
+patched SPICE dependency in an unused build directory before assembling again.
+Do not bypass that check or assume the old build prefix contains a prior live fix.
+
+Run `python3 -m unittest discover -s tests -p 'test_sidecar.py'` in the guest.
+Stage `guest/libexec/linuxhost-agent`, `guest/bin/hostctl`, and the extension's
+`extension.js`, `displayMenu.js` and `metadata.json` at their manifest targets,
+preserving root ownership and modes. Preserve the unchanged `hostLock.js` and
+private configuration. The agent's bounded client concurrency is required so a
+slow display request cannot hold up a lock request. Record originals and applied
+hashes in the installation's private migration receipt.
+
+Install the staged guest files without restarting the running guest services,
+then stop the VM cleanly and switch the validated app before the next boot. Use
+the existing supervisor and canonical app path. The supervisor owns QMP's single
+client connection; a second client cannot issue shutdown commands there. For a
+VM-only maintenance stop, first verify that no host power/logout action is pending,
+then request guest `systemctl poweroff` and wait for the app and supervisor to exit.
+`hostctl poweroff` also requests host shutdown and is unsuitable for this step.
+The helper must inherit the Mac graphical bootstrap namespace; running
+its discovery test from an ordinary SSH shell is not sufficient connection
+validation. No new QEMU port, guest kernel module, GNOME Network Displays build or
+runtime SSH service is required.
+
+After restart, open Quick Settings → Displays. Confirm the iPad appears, connect
+it, verify the second Linux output, disconnect and reconnect. Check that Display
+Settings opens, menu disable/enable leaves session actions working, and a missing
+or sleeping iPad produces a recoverable result. Verify Command+L while a display
+operation is pending before claiming native lock/sleep cancellation acceptance.
+The reference scope is one external screen; additional external outputs are not
+part of this change. See SIDECAR.md for unknown-outcome handling after a deadline.

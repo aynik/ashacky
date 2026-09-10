@@ -1,9 +1,9 @@
 {
   "uuid": "linuxhost@local",
-  "name": "Host session actions",
-  "description": "Route standard GNOME lock, power and logout actions to the dedicated host session",
+  "name": "Ashacky integration",
+  "description": "Host session actions and wireless display controls",
   "shell-version": [
     "50"
   ],
-  "version": 2
+  "version": 3
 }
