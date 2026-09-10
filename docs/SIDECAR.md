@@ -6,9 +6,12 @@ agent and authenticated SPICE channel. The host app launches an embedded helper
 in its graphical session; there is no runtime SSH, additional permission app,
 LaunchAgent or new virtual port.
 
-The supported layout for this work is the built-in screen plus one external
-screen. Disconnect an HDMI/DisplayPort monitor before connecting an iPad. AirPlay
-TV control is separate work and is not implemented here.
+The three-output candidate is designed to run the built-in screen, an
+HDMI/DisplayPort monitor and one Sidecar iPad together. Automated layout tests and
+the macOS runtime checks passed; simultaneous rendering and physical hotplug have
+not been tested. Activation is deferred until the full setup is available. The
+reference installation still runs the tested two-output version. AirPlay TV
+control is separate work and is not implemented here.
 
 ## GNOME controls
 
@@ -20,15 +23,24 @@ menu is open. There is no background discovery polling loop. Wake/unlock a missi
 iPad, then refresh; an empty list does not prove the backend is unsupported.
 
 macOS creates the Sidecar screen, and the existing CocoaSpice/virtual-GPU hotplug
-path supplies the second Linux output. No additional guest screen-capture or
+path supplies the additional Linux outputs. No additional guest screen-capture or
 encoding stage is introduced. GNOME Network Displays is not required or patched.
 
 Only the configured guest desktop user and root may request these operations.
 The guest strips unknown fields, including supplied tokens and command strings.
 Connection targets are fixed-format opaque IDs, never executable names or shell
 fragments. The native helper checks the current Mac console user and refuses a
-new connection when the external-display slot is occupied or cannot be determined.
+new connection when all three virtual outputs are occupied, the screen count is
+unknown, or another Sidecar iPad is connected.
 Repeated already-satisfied operations are no-ops.
+
+The frontend preserves each connected screen's virtual output while another screen
+is removed or AppKit changes its screen enumeration order. A vacant output can be
+reused on reconnection. Output zero follows the built-in screen when available and
+falls back to another screen when it disappears. Assignments are session-local;
+they are not a saved hardware-identity database. GNOME receives a horizontal layout
+in virtual-output order on host topology changes; custom arrangement persistence
+and matching the macOS screen arrangement are separate work.
 
 Disconnect is explicit: it can disconnect the selected iPad even if that Sidecar
 session was started manually in macOS. Ashacky does not automatically disconnect
@@ -66,6 +78,7 @@ user's graphical terminal:
 ```sh
 mkdir -p build/sidecar
 xcrun swiftc -swift-version 5 \
+  -import-objc-header host/common/DisplayLayout.h \
   host/devices/SidecarBackend.swift tools/sidecar-probe.swift \
   -o build/sidecar/sidecar-probe
 build/sidecar/sidecar-probe list
@@ -120,8 +133,13 @@ match the staged sources, the extension is active, and discovery succeeds throug
 the authenticated SPICE channel. The owner confirmed the GNOME menu works; a live
 Mutter observer recorded the second output disappearing on disconnect and returning
 on reconnect. The guest agent and control broker reported no automatic restarts.
-Unattended iPad reconnection, a locked/asleep iPad, physical sleep/lock during
-connection, and multiple external screens are not claimed as validated behavior.
+The three-output planner additionally has isolated coverage for either connection
+order, removal/reconnection of each external screen, reordered host enumeration,
+primary-screen fallback and output-capacity rejection. Those checks do not render
+three real desktops. Simultaneous wired-monitor/Sidecar acceptance is deferred;
+neither a source commit nor a successful build establishes that hardware behavior.
+Unattended iPad reconnection, a locked/asleep iPad and physical sleep/lock during
+connection are not claimed as validated behavior.
 
 Private entry points were identified from the MIT-licensed
 [SidecarLauncher source](https://github.com/Ocasio-J/SidecarLauncher/blob/4b7a9df950a64239b2a073428f0390fc16934a9e/SidecarLauncher/main.swift)

@@ -131,7 +131,8 @@ def main():
     run(['swiftc', *compiled, *link_flags, '-o', contents / 'MacOS/Ashacky'])
     run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/frontend/Launcher.swift',
          '-o', contents / 'MacOS/AshackyLauncher'])
-    run(['swiftc', '-swift-version', '5', '-O', ROOT / 'host/devices/SidecarBackend.swift',
+    run(['swiftc', '-swift-version', '5', '-O', '-import-objc-header', ROOT / 'host/common/DisplayLayout.h',
+         ROOT / 'host/devices/SidecarBackend.swift',
          ROOT / 'tools/sidecar-probe.swift', '-o', contents / 'MacOS/AshackySidecar'])
     # Retire the old frontend name when rebuilding an existing output directory.
     (contents / 'MacOS/LinuxHostSPICE').unlink(missing_ok=True)

@@ -259,5 +259,24 @@ it, verify the second Linux output, disconnect and reconnect. Check that Display
 Settings opens, menu disable/enable leaves session actions working, and a missing
 or sleeping iPad produces a recoverable result. Verify Command+L while a display
 operation is pending before claiming native lock/sleep cancellation acceptance.
-The reference scope is one external screen; additional external outputs are not
-part of this change. See SIDECAR.md for unknown-outcome handling after a deadline.
+For the three-output update, replace `host/session/session.py` during the same
+clean stop as the app. QEMU must boot with `max_outputs=3`; restarting only the
+frontend cannot add a scanout to a running VM. No guest file, module, identity or
+permission change is needed. Preserve the matching previous app and supervisor
+for rollback. The C layout fixture compares the supervisor's GPU capacity with
+the common frontend/Sidecar policy, and the runtime check verifies the bundled
+helper's capacity without touching hardware.
+
+When committing prepared sources before activation, retain the installed
+supervisor until the paired app switch. The host checkout may show that retained
+file as a deliberate local modification; do not discard it merely to clean Git
+status. Preserve original and candidate hashes in the private migration receipt.
+A source commit does not authorize restarting or activating the candidate.
+
+Test the built-in screen, wired monitor and Sidecar simultaneously. Disconnect
+and reconnect each external screen while the other stays active, checking image,
+pointer/keyboard, virtual-output identity and the capture-release shortcut. Test
+both connection orders. The default host-driven guest layout remains horizontal;
+do not claim persistence of a custom GNOME arrangement across hotplug. Lid closure
+fallback has planner coverage but needs a separate hardware test. See SIDECAR.md
+for unknown-outcome handling after a deadline.

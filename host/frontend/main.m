@@ -20,6 +20,7 @@
 #import "CSPort.h"
 #import "CSPortDelegate.h"
 #import "AshackyHost-Swift.h"
+#import "../common/DisplayLayout.h"
 
 static CSConnection *displayConnection(NSURL *socketURL) {
  CSConnection *connection=[[CSConnection alloc] initWithUnixSocketFile:socketURL];
@@ -62,6 +63,7 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 @property(nonatomic,strong) GuestView *view;
 @property(nonatomic,strong) CSMetalRenderer *renderer;
 @property(nonatomic,strong) NSNumber *screenID;
+@property(nonatomic) NSUInteger monitorID;
 @end
 @implementation DisplaySlot @end
 @interface App : NSObject<NSApplicationDelegate,CSConnectionDelegate,NSWindowDelegate,CSPortDelegate>
@@ -358,36 +360,60 @@ static CSConnection *displayConnection(NSURL *socketURL) {
 }
 - (void)syncScreens {
  if(!self.slots.count)return;
- NSScreen *primary=nil,*secondary=nil;
- for(NSScreen *screen in NSScreen.screens) if([screen.deviceDescription[@"NSScreenNumber"] isEqual:self.slots[0].screenID]) primary=screen;
- if(!primary) primary=NSScreen.screens.firstObject;
- for(NSScreen *screen in NSScreen.screens) if(screen!=primary) { secondary=screen;break; }
- if(self.borderless && primary) [self.window setFrame:primary.frame display:YES];
- if(secondary && self.slots.count==1) {
-  DisplaySlot *slot=[DisplaySlot new];slot.screenID=secondary.deviceDescription[@"NSScreenNumber"];
-  slot.window=[[HostWindow alloc] initWithContentRect:secondary.frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+ NSArray<NSScreen *> *screens=NSScreen.screens;
+ // AppKit can briefly report no screens during topology changes. Keep the
+ // current desktop until it provides a usable snapshot on the next event.
+ if(!screens.count || screens.count>32)return;
+ uint32_t screenIDs[32],previous[ASHACKY_DISPLAY_LIMIT]={0},next[ASHACKY_DISPLAY_LIMIT],builtIn=0;
+ NSMutableDictionary<NSNumber *,NSScreen *> *byID=[NSMutableDictionary dictionary];
+ for(NSUInteger i=0;i<screens.count;i++) {
+  uint32_t ident=[screens[i].deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+  screenIDs[i]=ident;byID[@(ident)]=screens[i];
+  if(CGDisplayIsBuiltin(ident))builtIn=ident;
+ }
+ for(DisplaySlot *slot in self.slots)previous[slot.monitorID]=slot.screenID.unsignedIntValue;
+ ashacky_plan_displays(screenIDs,screens.count,builtIn,previous,next);
+ BOOL restoreFocus=NO;
+ for(DisplaySlot *slot in self.slots.copy) {
+  if(slot.monitorID==0 || next[slot.monitorID]==slot.screenID.unsignedIntValue)continue;
+  restoreFocus|=slot.window.isKeyWindow;
+  [slot.view releaseGuestKeys];[slot.view.display removeRenderer:slot.renderer];
+  slot.view.display.isEnabled=NO;slot.view.display=nil;slot.window.delegate=nil;
+  [slot.window close];[self.slots removeObject:slot];
+ }
+ DisplaySlot *primary=self.slots[0];
+ if(primary.screenID.unsignedIntValue!=next[0])[primary.view releaseGuestKeys];
+ primary.screenID=@(next[0]);
+ if(self.borderless)[self.window setFrame:byID[primary.screenID].frame display:YES];
+ for(NSUInteger ident=1;ident<ASHACKY_DISPLAY_LIMIT;ident++) {
+  if(!next[ident])continue;
+  NSScreen *screen=byID[@(next[ident])];DisplaySlot *existing=nil;
+  for(DisplaySlot *slot in self.slots)if(slot.monitorID==ident)existing=slot;
+  if(existing) { [existing.window setFrame:screen.frame display:YES];continue; }
+  DisplaySlot *slot=[DisplaySlot new];slot.monitorID=ident;slot.screenID=@(next[ident]);
+  slot.window=[[HostWindow alloc] initWithContentRect:screen.frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
   slot.window.title=[NSString stringWithFormat:@"%@ — External display",NSProcessInfo.processInfo.environment[@"LINUXHOST_TITLE"] ?: @"Linux"];slot.window.delegate=self;slot.window.backgroundColor=NSColor.blackColor;slot.window.acceptsMouseMovedEvents=YES;slot.window.releasedWhenClosed=NO;
-  slot.view=[[GuestView alloc] initWithFrame:NSMakeRect(0,0,secondary.frame.size.width,secondary.frame.size.height) device:MTLCreateSystemDefaultDevice()];
+  slot.view=[[GuestView alloc] initWithFrame:NSMakeRect(0,0,screen.frame.size.width,screen.frame.size.height) device:MTLCreateSystemDefaultDevice()];
   slot.view.app=self;slot.view.input=self.sharedInput;slot.view.allowedTouchTypes=NSTouchTypeMaskIndirect;slot.view.wantsRestingTouches=YES;slot.view.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;slot.view.clearColor=MTLClearColorMake(0,0,0,1);
   slot.window.contentView=slot.view;slot.renderer=[[CSMetalRenderer alloc] initWithMetalKitView:slot.view];slot.view.delegate=slot.renderer;
-  [slot.window makeFirstResponder:slot.view];[self.slots addObject:slot];[slot.window orderFront:nil];
- } else if(!secondary && self.slots.count>1) {
-  DisplaySlot *slot=self.slots.lastObject;[slot.view releaseGuestKeys];[slot.view.display removeRenderer:slot.renderer];slot.view.display.isEnabled=NO;slot.window.delegate=nil;[slot.window close];[self.slots removeLastObject];[self.window makeKeyWindow];
+  [slot.window makeFirstResponder:slot.view];[self.slots addObject:slot];
+  if(self.borderless)[slot.window orderFront:nil];
  }
- if(secondary && self.slots.count>1) { self.slots[1].screenID=secondary.deviceDescription[@"NSScreenNumber"];[self.slots[1].window setFrame:secondary.frame display:YES]; }
+ [self.slots sortUsingComparator:^NSComparisonResult(DisplaySlot *a,DisplaySlot *b) { return [@(a.monitorID) compare:@(b.monitorID)]; }];
+ if(restoreFocus)[self.window makeKeyWindow];
  [self configureDisplays];
  NSLog(@"Host displays=%lu frontend windows=%lu",(unsigned long)NSScreen.screens.count,(unsigned long)self.slots.count);
 }
 - (void)configureDisplays {
- CGFloat x=0;
- for(NSUInteger i=0;i<self.slots.count;i++) {
-  DisplaySlot *slot=self.slots[i];CSDisplay *display=self.displays[@(i)];
+ CGFloat x=0;NSMutableSet<NSNumber *> *active=[NSMutableSet set];
+ for(DisplaySlot *slot in self.slots) {
+  NSNumber *ident=@(slot.monitorID);[active addObject:ident];CSDisplay *display=self.displays[ident];
   if(display && slot.view.display!=display) { [slot.view.display removeRenderer:slot.renderer];slot.view.display=display;[display addRenderer:slot.renderer]; }
   CGSize size=slot.view.drawableSize;
-  if(display && size.width>0 && size.height>0) [display requestResolution:CGRectMake(x,0,size.width,size.height)];
+  if(display && size.width>0 && size.height>0) { display.isEnabled=YES;[display requestResolution:CGRectMake(x,0,size.width,size.height)]; }
   x+=size.width;
  }
- for(NSNumber *ident in self.displays) if(ident.unsignedIntegerValue>=self.slots.count) self.displays[ident].isEnabled=NO;
+ for(NSNumber *ident in self.displays)if(![active containsObject:ident])self.displays[ident].isEnabled=NO;
  [self resizeDisplay];
 }
 - (void)retryConnection {

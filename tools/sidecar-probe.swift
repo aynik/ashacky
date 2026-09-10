@@ -30,6 +30,7 @@ import Darwin
 
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
+        if args == ["capacity"] { print(ASHACKY_DISPLAY_LIMIT); return }
         guard (args.count == 1 && args[0] == "list") ||
               (args.count == 2 && ["connect", "disconnect"].contains(args[0]) &&
                args[1].range(of: "^sidecar:[0-9a-f]{64}$", options: .regularExpression) != nil) else {
@@ -55,9 +56,10 @@ import Darwin
             }
             if args[0] == "connect" {
                 let screens = screenCounts()
-                guard screens["known"] as? Bool == true, screens["external"] as? Int == 0,
-                      !snapshot.contains(where: { $0["connected"] as? Bool == true }) else {
-                    finish(["ok": false, "error": "The single external-display slot is occupied or unavailable"], code: 2)
+                let total = UInt32(clamping: screens["total"] as? Int ?? 0)
+                guard ashacky_can_add_sidecar(screens["known"] as? Bool == true, total,
+                      snapshot.contains(where: { $0["connected"] as? Bool == true })) else {
+                    finish(["ok": false, "error": "No virtual display output is available, or another iPad is already connected"], code: 2)
                 }
             }
             guard active() else { finish(["ok": false, "error": "Mac session changed"], code: 2) }

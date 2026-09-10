@@ -28,8 +28,12 @@ Sidecar controls are active after an attended VM restart. The owner confirmed th
 existing GNOME extension's Displays menu works; live observation recorded Linux
 removing and restoring its second output during the menu's disconnect/reconnect
 test. Discovery and actions use authenticated SPICE control, without idle discovery
-polling or an additional app/LaunchAgent. The accepted scope is one external
-screen. See [SIDECAR.md](SIDECAR.md) for architecture, deadlines, GUI-session
+polling or an additional app/LaunchAgent. That acceptance covered one external
+screen. A three-output candidate adds capacity for a wired monitor and Sidecar
+together, with tested layout logic for preserving surviving screen assignments.
+It has not been activated or tested with three real screens. That acceptance is
+deferred until the hardware is available; the reference installation retains the
+tested two-output app and supervisor. See [SIDECAR.md](SIDECAR.md) for architecture, deadlines, GUI-session
 requirements and remaining tests. AirPlay is not implemented.
 
 ## Audio behavior

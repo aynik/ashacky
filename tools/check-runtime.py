@@ -65,6 +65,13 @@ def main():
         subprocess.run([str(sidecar_check)], check=True, timeout=10)
         if not (contents / 'MacOS/AshackySidecar').is_file():
             raise RuntimeError('Missing bundled Sidecar helper')
+        display_check = temporary / 'display-layout-checks'
+        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
+            str(ROOT / 'tests/display-layout.c'), '-o', str(display_check)], check=True)
+        capacity = subprocess.check_output([str(display_check)], text=True, timeout=5).strip()
+        if run('AshackySidecar', 'capacity').strip() != capacity:
+            raise RuntimeError('Bundled Sidecar helper has a stale display capacity')
+        print('Three-output layout, stable hotplug identities and Sidecar capacity checks passed.')
         peer = temporary / 'control-peer'
         subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-O',
             str(ROOT / 'host/session/ControlChannel.swift'), str(ROOT / 'tests/control-peer.swift'),

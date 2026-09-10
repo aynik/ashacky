@@ -17,7 +17,8 @@ def arguments(c, network_fds):
        '-smp',str(c.get('cpus',4)),'-m',str(c.get('memory',8192)),'-nodefaults','-vga','none']
     for i,(mac,fd) in enumerate(zip(c['macs'],network_fds)):
         a+=['-device',f'virtio-net-pci,mac={mac},netdev=net{i},addr=0x{i+1:x},romfile=', '-netdev',f'socket,id=net{i},fd={fd}']
-    a+=['-device','virtio-ramfb-gl,addr=0x3,hostmem=8G,blob=true,venus=true,neptune=true,max_outputs=2,xres=2880,yres=1800',
+    # Capacity is checked against host/common/DisplayLayout.h by the source tests.
+    a+=['-device','virtio-ramfb-gl,addr=0x3,hostmem=8G,blob=true,venus=true,neptune=true,max_outputs=3,xres=2880,yres=1800',
         '-display','none','-spice',f'unix=on,addr={runtime}/spice.sock,disable-ticketing=on,gl=es,image-compression=off,playback-compression=off,streaming-video=off',
         '-drive',f'if=pflash,format=raw,unit=0,readonly=on,file={APP}/Resources/edk2-aarch64-code.fd',
         '-drive',f'if=pflash,format=qcow2,unit=1,file={c["vars"]}',

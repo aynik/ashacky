@@ -322,3 +322,30 @@ readback reported the iPad connected. The guest agent and private control broker
 remained active with zero automatic restarts. Physical lock/sleep during a pending
 connection, extension disable/enable and unavailable-iPad recovery have not been
 tested on the live desktop; see [SIDECAR.md](SIDECAR.md).
+
+## Wired monitor and Sidecar together
+
+The three-output candidate raises the supervisor's GPU scanout count to three
+and assigns a frontend window to each active host screen, preserving surviving
+external-screen output IDs when another screen is removed. The Sidecar helper
+and frontend share a C capacity/layout policy. The guest source test compares
+that capacity with the actual supervisor-generated QEMU argument.
+
+All 108 source tests and 193 file syntax/privacy checks pass. The new C fixture
+covers either external-screen connection order, disconnect/reconnect of each
+screen, reordered host enumeration, primary-screen fallback and capacity limits.
+The candidate compiled with Command Line Tools and passed full runtime checks:
+signatures, 53 Mach-O dependency closures, Metal shader, SPICE acknowledgement
+under both socket conditions, the bundled Sidecar capacity, control/session,
+FIDO2, camera, launcher and silent audio. No real display connection or guest
+boot was performed by these fixtures. Guide checks passed 36 shell blocks and
+60 local links/anchors.
+
+The matched app and supervisor are staged with private originals and a clean
+restart/rollback procedure. The owner cannot test all three screens yet, so
+activation and real three-screen/hotplug acceptance are deliberately deferred.
+The source is being committed with that limitation recorded. Readback confirms
+the canonical app and installed supervisor still match their preserved two-output
+originals. No guest files, permission identities or physical device configuration
+changed during preparation. The host retains the old supervisor as a deliberate
+local change until the matched app and supervisor can be activated together.
